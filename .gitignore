@@ -137,3 +137,16 @@ $RECYCLE.BIN/
 .directory
 .Trash-*
 .nfs*
+
+# Development/Debug test files
+minimal-test/
+electron-app/test-dir/
+electron-app/test-*.js
+electron-app/test-*.json
+test-screenshots.bat
+
+# Duplicate directories at root
+/src/
+
+# Root-level assets (use resources/ instead)
+/icon.png
