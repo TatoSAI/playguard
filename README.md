@@ -375,21 +375,6 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guid
 
 MIT License - see [LICENSE](LICENSE) for details
 
-## 🔗 Links
-
-- **Unity SDK**: [github.com/playguard/unity-sdk](https://github.com/TatoSAI/playguard--unity-sdk)
-- **Documentation**: [playguard.dev/docs](https://playguard.dev/docs)
-- **Website**: [playguard.dev](https://playguard.dev)
-- **Discord**: [discord.gg/playguard](https://discord.gg/playguard)
-- **Issues**: [github.com/playguard/playguard/issues](https://github.com/TatoSAI/playguard/issues)
-
-## 💬 Support
-
-- 📧 Email: support@playguard.dev
-- 💬 Discord: [Join our community](https://discord.gg/playguard)
-- 🐛 Bug Reports: [GitHub Issues](https://github.com/TatoSAI/playguard/issues)
-- 📖 Documentation: [playguard.dev/docs](https://playguard.dev/docs)
-
 ## 🙏 Acknowledgments
 
 Built with ❤️ using:
