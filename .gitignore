@@ -42,14 +42,11 @@ electron-app/release/
 release/
 app-builds/
 
-# Unity (if SDK is in same repo)
-unity-sdk/[Ll]ibrary/
-unity-sdk/[Tt]emp/
-unity-sdk/[Oo]bj/
-unity-sdk/[Bb]uild/
-unity-sdk/[Bb]uilds/
-unity-sdk/[Ll]ogs/
-unity-sdk/[Uu]ser[Ss]ettings/
+# Unity SDK (separate repository - do not include here)
+unity-sdk/
+
+# Test cases (user data - examples only)
+test-cases/
 *.csproj
 *.unityproj
 *.sln
