@@ -1,0 +1,142 @@
+# ===================================
+# PlayGuard Project .gitignore
+# ===================================
+
+# Node modules
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+yarn.lock
+
+# Build outputs
+dist/
+build/
+out/
+*.log
+
+# Electron builds
+electron-app/out/
+electron-app/dist/
+electron-app/.vite/
+electron-app/.electron-vite/
+electron-app/release/
+
+# Installer files (never commit builds!)
+*.exe
+*.dmg
+*.pkg
+*.deb
+*.rpm
+*.AppImage
+*.snap
+*.msi
+*.nsis
+*.zip
+*.tar.gz
+*.tgz
+
+# electron-builder output
+release/
+app-builds/
+
+# Unity (if SDK is in same repo)
+unity-sdk/[Ll]ibrary/
+unity-sdk/[Tt]emp/
+unity-sdk/[Oo]bj/
+unity-sdk/[Bb]uild/
+unity-sdk/[Bb]uilds/
+unity-sdk/[Ll]ogs/
+unity-sdk/[Uu]ser[Ss]ettings/
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.swp
+*.swo
+*~
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.iml
+.vs/
+*.code-workspace
+
+# Test results
+test-results/
+coverage/
+*.lcov
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# User data (local test storage)
+# Note: This is user-specific data, don't commit
+electron-app/test-data/
+screenshots/
+*.screenshot.png
+
+# Reports and exports
+reports/
+exports/
+*.report.json
+*.report.html
+*.report.pdf
+
+# AI Models (large files)
+*.h5
+*.pb
+*.tflite
+*.onnx
+models/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+.cache/
+
+# Build artifacts
+*.tgz
+*.zip
+*.tar.gz
+
+# macOS
+.AppleDouble
+.LSOverride
+
+# Windows
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*

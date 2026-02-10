@@ -1,0 +1,5 @@
+{
+  "name": "minimal-electron-test",
+  "version": "1.0.0",
+  "main": "test-resolve.js"
+}

@@ -1,0 +1,35 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Blue arcade button with 3D effect -->
+  <circle cx="128" cy="132" r="115" fill="#1E40AF"/>
+  <circle cx="128" cy="128" r="115" fill="#2563EB"/>
+  <circle cx="128" cy="124" r="115" fill="#3B82F6"/>
+  <circle cx="128" cy="120" r="105" fill="#60A5FA"/>
+  <circle cx="128" cy="116" r="95" fill="#93C5FD"/>
+  <ellipse cx="128" cy="95" rx="70" ry="35" fill="#DBEAFE" opacity="0.4"/>
+
+  <!-- Spaceship styled as PLAY button (pointing right) - MOVED FORWARD -->
+
+  <!-- Main body (play triangle shape - MOVED FORWARD) -->
+  <path d="M 85 80 L 85 160 L 190 120 Z" fill="#FFFFFF"/>
+
+  <!-- Wing details (top and bottom) -->
+  <path d="M 85 80 L 125 97 L 190 120 L 178 114 L 118 90 Z" fill="#E0E7FF" opacity="0.5"/>
+  <path d="M 85 160 L 125 143 L 190 120 L 178 126 L 118 150 Z" fill="#C7D2FE" opacity="0.5"/>
+
+  <!-- Cockpit window (circular, on the ship) -->
+  <circle cx="118" cy="120" r="12" fill="#60A5FA"/>
+  <circle cx="116" cy="118" r="7" fill="#DBEAFE"/>
+
+  <!-- Engine flames (FROM THE EDGE of the ship - x=85) -->
+  <!-- Top jet -->
+  <ellipse cx="82" cy="100" rx="9" ry="7" fill="#FCD34D"/>
+  <ellipse cx="83" cy="100" rx="5" ry="4" fill="#FEF9C3"/>
+
+  <!-- Center jet (main) -->
+  <ellipse cx="80" cy="120" rx="12" ry="8" fill="#FCD34D"/>
+  <ellipse cx="82" cy="120" rx="7" ry="6" fill="#FEF9C3"/>
+
+  <!-- Bottom jet -->
+  <ellipse cx="82" cy="140" rx="9" ry="7" fill="#FCD34D"/>
+  <ellipse cx="83" cy="140" rx="5" ry="4" fill="#FEF9C3"/>
+</svg>
