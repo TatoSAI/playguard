@@ -85,22 +85,35 @@ export interface ExecutionStats {
 }
 
 export class ReportManager {
-  private historyFile: string
-  private sessionsFile: string // New: for suite execution sessions
+  private historyFile: string | null = null
+  private sessionsFile: string | null = null // New: for suite execution sessions
   private executions: ExecutionRecord[] = [] // Legacy: individual test executions
   private sessions: SuiteExecutionSession[] = [] // New: suite execution sessions
 
   constructor() {
-    const userDataPath = app.getPath('userData')
-    const testDataPath = path.join(userDataPath, 'test-data')
-    this.historyFile = path.join(testDataPath, 'execution-history.json')
-    this.sessionsFile = path.join(testDataPath, 'suite-sessions.json')
+    // Data paths initialized lazily to avoid accessing app before it's ready
+  }
+
+  /**
+   * Get data paths (lazy initialization)
+   */
+  private getDataPaths(): { historyFile: string; sessionsFile: string } {
+    if (!this.historyFile || !this.sessionsFile) {
+      const userDataPath = app.getPath('userData')
+      const testDataPath = path.join(userDataPath, 'test-data')
+      this.historyFile = path.join(testDataPath, 'execution-history.json')
+      this.sessionsFile = path.join(testDataPath, 'suite-sessions.json')
+    }
+    return { historyFile: this.historyFile, sessionsFile: this.sessionsFile }
   }
 
   async initialize(): Promise<void> {
     try {
+      // Initialize paths
+      const { historyFile } = this.getDataPaths()
+
       // Ensure directory exists
-      await fs.mkdir(path.dirname(this.historyFile), { recursive: true })
+      await fs.mkdir(path.dirname(historyFile), { recursive: true })
 
       // Load existing history (legacy)
       await this.loadHistory()
@@ -116,7 +129,8 @@ export class ReportManager {
 
   private async loadHistory(): Promise<void> {
     try {
-      const data = await fs.readFile(this.historyFile, 'utf-8')
+      const { historyFile } = this.getDataPaths()
+      const data = await fs.readFile(historyFile, 'utf-8')
       this.executions = JSON.parse(data)
       console.log(`[ReportManager] Loaded ${this.executions.length} execution records`)
     } catch (error: any) {
@@ -132,7 +146,8 @@ export class ReportManager {
 
   private async saveHistory(): Promise<void> {
     try {
-      await fs.writeFile(this.historyFile, JSON.stringify(this.executions, null, 2), 'utf-8')
+      const { historyFile } = this.getDataPaths()
+      await fs.writeFile(historyFile, JSON.stringify(this.executions, null, 2), 'utf-8')
     } catch (error) {
       console.error('[ReportManager] Failed to save history:', error)
       throw error
@@ -141,7 +156,8 @@ export class ReportManager {
 
   private async loadSessions(): Promise<void> {
     try {
-      const data = await fs.readFile(this.sessionsFile, 'utf-8')
+      const { sessionsFile } = this.getDataPaths()
+      const data = await fs.readFile(sessionsFile, 'utf-8')
       this.sessions = JSON.parse(data)
       console.log(`[ReportManager] Loaded ${this.sessions.length} suite execution sessions`)
     } catch (error: any) {
@@ -157,7 +173,8 @@ export class ReportManager {
 
   private async saveSessions(): Promise<void> {
     try {
-      await fs.writeFile(this.sessionsFile, JSON.stringify(this.sessions, null, 2), 'utf-8')
+      const { sessionsFile } = this.getDataPaths()
+      await fs.writeFile(sessionsFile, JSON.stringify(this.sessions, null, 2), 'utf-8')
     } catch (error) {
       console.error('[ReportManager] Failed to save sessions:', error)
       throw error

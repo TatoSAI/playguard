@@ -29,10 +29,20 @@ interface TestSuite {
   description?: string
   environment: 'Development' | 'Staging' | 'Production' | 'Other'
   targetPlatform: 'Android' | 'iOS' | 'Web' | 'Cross-platform'
+  gameLinkId?: string
   tags: string[]
   testCaseIds: string[]
   createdAt: string
   updatedAt: string
+}
+
+interface GameLink {
+  id: string
+  name: string
+  devUrl: string
+  stagingUrl: string
+  productionUrl: string
+  createdAt: string
 }
 
 // Step Item Component - uses useScreenshot hook
@@ -308,6 +318,7 @@ function DroppableSuiteItem({
 
 export default function TestSuites() {
   const [suites, setSuites] = useState<TestSuite[]>([])
+  const [gameLinks, setGameLinks] = useState<GameLink[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [showEditDialog, setShowEditDialog] = useState(false)
@@ -318,12 +329,16 @@ export default function TestSuites() {
   const [newSuite, setNewSuite] = useState({
     name: '',
     description: '',
-    environment: 'Development' as const
+    environment: 'Development' as 'Development' | 'Staging' | 'Production' | 'Other',
+    targetPlatform: 'Android' as 'Android' | 'iOS' | 'Web' | 'Cross-platform',
+    gameLinkId: ''
   })
   const [editSuite, setEditSuite] = useState({
     name: '',
     description: '',
-    environment: 'Development' as const
+    environment: 'Development' as 'Development' | 'Staging' | 'Production' | 'Other',
+    targetPlatform: 'Android' as 'Android' | 'iOS' | 'Web' | 'Cross-platform',
+    gameLinkId: ''
   })
   const [showEditTestDialog, setShowEditTestDialog] = useState(false)
   const [editingTest, setEditingTest] = useState<any | null>(null)
@@ -388,10 +403,14 @@ export default function TestSuites() {
   const loadSuites = async () => {
     try {
       setLoading(true)
-      const result = await window.api.suite.list()
-      if (result.success) {
-        setSuites(result.suites || [])
+      const [suiteResult, links] = await Promise.all([
+        window.api.suite.list(),
+        window.api.gameLink.getAll().catch(() => [] as GameLink[])
+      ])
+      if (suiteResult.success) {
+        setSuites(suiteResult.suites || [])
       }
+      setGameLinks(links)
     } catch (error) {
       console.error('Failed to load suites:', error)
     } finally {
@@ -410,6 +429,8 @@ export default function TestSuites() {
         name: newSuite.name,
         description: newSuite.description,
         environment: newSuite.environment,
+        targetPlatform: newSuite.targetPlatform,
+        ...(newSuite.gameLinkId ? { gameLinkId: newSuite.gameLinkId } : {}),
         tags: [],
         testCaseIds: []
       })
@@ -417,7 +438,7 @@ export default function TestSuites() {
       if (result.success) {
         await loadSuites()
         setShowCreateDialog(false)
-        setNewSuite({ name: '', description: '', environment: 'Development' })
+        setNewSuite({ name: '', description: '', environment: 'Development', targetPlatform: 'Android', gameLinkId: '' })
         toast.success('Suite created successfully!', 'Suite Created')
       }
     } catch (error) {
@@ -431,7 +452,9 @@ export default function TestSuites() {
     setEditSuite({
       name: suite.name,
       description: suite.description || '',
-      environment: suite.environment
+      environment: suite.environment,
+      targetPlatform: suite.targetPlatform || 'Android',
+      gameLinkId: suite.gameLinkId || ''
     })
     setShowEditDialog(true)
   }
@@ -446,14 +469,16 @@ export default function TestSuites() {
       const result = await window.api.suite.update(editingSuite.id, {
         name: editSuite.name,
         description: editSuite.description,
-        environment: editSuite.environment
+        environment: editSuite.environment,
+        targetPlatform: editSuite.targetPlatform,
+        gameLinkId: editSuite.gameLinkId || undefined
       })
 
       if (result.success) {
         await loadSuites()
         setShowEditDialog(false)
         setEditingSuite(null)
-        setEditSuite({ name: '', description: '', environment: 'Development' })
+        setEditSuite({ name: '', description: '', environment: 'Development', targetPlatform: 'Android' })
         toast.success('Suite updated successfully!', 'Suite Updated')
       }
     } catch (error) {
@@ -643,14 +668,29 @@ export default function TestSuites() {
 
   const runSuite = async (suite: TestSuite) => {
     try {
-      // Get connected device
-      const devices = await window.api.adb.getDevices()
-      if (!devices || devices.length === 0) {
-        toast.error('No Android device connected. Please connect a device first.')
-        return
+      // Get connected device — prefer browser device for Web suites
+      let deviceId: string | undefined
+
+      if (suite.targetPlatform === 'Web') {
+        const browserDevices = await window.api.browserDevice.getAll().catch(() => [])
+        if (browserDevices && browserDevices.length > 0) {
+          deviceId = browserDevices[0].id
+        }
       }
 
-      const deviceId = devices[0].id
+      if (!deviceId) {
+        const adbDevices = await window.api.adb.getDevices()
+        if (!adbDevices || adbDevices.length === 0) {
+          const browserDevices = await window.api.browserDevice.getAll().catch(() => [])
+          if (!browserDevices || browserDevices.length === 0) {
+            toast.error('No device connected. Please connect a device or add a browser device first.')
+            return
+          }
+          deviceId = browserDevices[0].id
+        } else {
+          deviceId = adbDevices[0].id
+        }
+      }
 
       toast.info(`Running suite "${suite.name}"...`, 'Starting')
 
@@ -1222,6 +1262,46 @@ export default function TestSuites() {
                   <option value="Other">Other</option>
                 </select>
               </div>
+
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-1">
+                  Target Platform
+                </label>
+                <select
+                  value={newSuite.targetPlatform}
+                  onChange={(e) =>
+                    setNewSuite({
+                      ...newSuite,
+                      targetPlatform: e.target.value as 'Android' | 'iOS' | 'Web' | 'Cross-platform',
+                      gameLinkId: ''
+                    })
+                  }
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground"
+                >
+                  <option value="Android">Android</option>
+                  <option value="iOS">iOS</option>
+                  <option value="Web">Web</option>
+                  <option value="Cross-platform">Cross-platform</option>
+                </select>
+              </div>
+
+              {newSuite.targetPlatform === 'Web' && (
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1">
+                    Game Link <span className="text-muted-foreground font-normal">(optional)</span>
+                  </label>
+                  <select
+                    value={newSuite.gameLinkId}
+                    onChange={(e) => setNewSuite({ ...newSuite, gameLinkId: e.target.value })}
+                    className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground"
+                  >
+                    <option value="">— None —</option>
+                    {gameLinks.map((gl) => (
+                      <option key={gl.id} value={gl.id}>{gl.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
 
             <div className="flex items-center gap-2 mt-6">
@@ -1234,7 +1314,7 @@ export default function TestSuites() {
               <button
                 onClick={() => {
                   setShowCreateDialog(false)
-                  setNewSuite({ name: '', description: '', environment: 'Development' })
+                  setNewSuite({ name: '', description: '', environment: 'Development', targetPlatform: 'Android', gameLinkId: '' })
                 }}
                 className="flex-1 px-4 py-2 border border-border rounded-lg hover:bg-muted transition-colors"
               >
@@ -1301,6 +1381,24 @@ export default function TestSuites() {
                   <option value="Other">Other</option>
                 </select>
               </div>
+
+              {editSuite.targetPlatform === 'Web' && (
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1">
+                    Game Link <span className="text-muted-foreground font-normal">(optional)</span>
+                  </label>
+                  <select
+                    value={editSuite.gameLinkId}
+                    onChange={(e) => setEditSuite({ ...editSuite, gameLinkId: e.target.value })}
+                    className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground"
+                  >
+                    <option value="">— None —</option>
+                    {gameLinks.map((gl) => (
+                      <option key={gl.id} value={gl.id}>{gl.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
 
             <div className="flex items-center gap-2 mt-6">
@@ -1314,7 +1412,7 @@ export default function TestSuites() {
                 onClick={() => {
                   setShowEditDialog(false)
                   setEditingSuite(null)
-                  setEditSuite({ name: '', description: '', environment: 'Development' })
+                  setEditSuite({ name: '', description: '', environment: 'Development', targetPlatform: 'Android', gameLinkId: '' })
                 }}
                 className="flex-1 px-4 py-2 border border-border rounded-lg hover:bg-muted transition-colors"
               >

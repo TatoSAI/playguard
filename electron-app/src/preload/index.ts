@@ -8,6 +8,7 @@ const api = {
     getDevices: () => ipcRenderer.invoke('adb:getDevices'),
     connect: (deviceId: string) => ipcRenderer.invoke('adb:connect', deviceId),
     disconnect: (deviceId: string) => ipcRenderer.invoke('adb:disconnect', deviceId),
+    captureScreenshot: (deviceId: string) => ipcRenderer.invoke('adb:captureScreenshot', deviceId),
 
     // App Lifecycle
     startApp: (deviceId: string, packageName: string, activityName?: string) =>
@@ -184,6 +185,53 @@ const api = {
       ipcRenderer.invoke('unity:executeCustomCommand', name, param)
   },
 
+  // HTML5 Custom Extensions (RUN.game SDK — mirrors unity API)
+  html5: {
+    detectSDK: (deviceId?: string) => ipcRenderer.invoke('html5:detectSDK', deviceId),
+    isConnected: () => ipcRenderer.invoke('html5:isConnected'),
+    listCustomProperties: () => ipcRenderer.invoke('html5:listCustomProperties'),
+    listCustomActions: () => ipcRenderer.invoke('html5:listCustomActions'),
+    listCustomCommands: () => ipcRenderer.invoke('html5:listCustomCommands'),
+    getAvailableExtensions: () => ipcRenderer.invoke('html5:getAvailableExtensions'),
+    getCustomProperty: (name: string) => ipcRenderer.invoke('html5:getCustomProperty', name),
+    executeCustomAction: (name: string, args: string[]) =>
+      ipcRenderer.invoke('html5:executeCustomAction', name, args),
+    executeCustomCommand: (name: string, param: string) =>
+      ipcRenderer.invoke('html5:executeCustomCommand', name, param)
+  },
+
+  // Browser Devices
+  browserDevice: {
+    getAll: () => ipcRenderer.invoke('browserDevice:getAll'),
+    add: (name: string, url: string, browserType: string) =>
+      ipcRenderer.invoke('browserDevice:add', name, url, browserType),
+    update: (id: string, updates: { name?: string; url?: string; browserType?: string }) =>
+      ipcRenderer.invoke('browserDevice:update', id, updates),
+    delete: (id: string) => ipcRenderer.invoke('browserDevice:delete', id),
+    detectBrowsers: () => ipcRenderer.invoke('browserDevice:detectBrowsers'),
+    getVersions: () => ipcRenderer.invoke('browserDevice:getVersions'),
+    openGame: (id: string) => ipcRenderer.invoke('browserDevice:openGame', id),
+    closeGame: () => ipcRenderer.invoke('browserDevice:closeGame')
+  },
+
+  // Game Links
+  gameLink: {
+    getAll: () => ipcRenderer.invoke('gameLink:getAll'),
+    add: (name: string, devUrl: string, stagingUrl: string, productionUrl: string) =>
+      ipcRenderer.invoke('gameLink:add', name, devUrl, stagingUrl, productionUrl),
+    update: (id: string, updates: { name?: string; devUrl?: string; stagingUrl?: string; productionUrl?: string }) =>
+      ipcRenderer.invoke('gameLink:update', id, updates),
+    delete: (id: string) => ipcRenderer.invoke('gameLink:delete', id)
+  },
+
+  // Browser frame capture (attaches WebFrameMain injection for cross-origin iframes)
+  recorder: {
+    attachBrowserCapture: (webContentsId: number) =>
+      ipcRenderer.invoke('recorder:attachBrowserCapture', webContentsId),
+    detachBrowserCapture: (webContentsId: number) =>
+      ipcRenderer.invoke('recorder:detachBrowserCapture', webContentsId)
+  },
+
   // Device Setup Profiles
   setup: {
     getAllProfiles: () => ipcRenderer.invoke('setup:getAllProfiles'),
@@ -216,6 +264,28 @@ const api = {
       ipcRenderer.invoke('prerequisites:clearCache'),
     getCacheStats: () =>
       ipcRenderer.invoke('prerequisites:getCacheStats')
+  },
+
+  // Ad-Hoc Testing (Exploratory testing with selective captures)
+  adhoc: {
+    startSession: (deviceId: string) =>
+      ipcRenderer.invoke('adhoc:startSession', deviceId),
+    stopSession: () =>
+      ipcRenderer.invoke('adhoc:stopSession'),
+    getCurrentSession: () =>
+      ipcRenderer.invoke('adhoc:getCurrentSession'),
+    captureScreenshot: (description?: string) =>
+      ipcRenderer.invoke('adhoc:captureScreenshot', description),
+    markIssue: (description: string, severity?: 'low' | 'medium' | 'high') =>
+      ipcRenderer.invoke('adhoc:markIssue', description, severity),
+    markSuccess: (description: string) =>
+      ipcRenderer.invoke('adhoc:markSuccess', description),
+    generateInsights: () =>
+      ipcRenderer.invoke('adhoc:generateInsights'),
+    loadSessions: () =>
+      ipcRenderer.invoke('adhoc:loadSessions'),
+    deleteSession: (sessionId: string) =>
+      ipcRenderer.invoke('adhoc:deleteSession', sessionId)
   },
 
   // Event listeners

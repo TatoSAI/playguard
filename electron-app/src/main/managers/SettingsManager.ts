@@ -371,6 +371,21 @@ export class SettingsManager {
         }
       },
 
+      runStudioSDK: {
+        apiServer: {
+          enabled: true,
+          port: 7777
+        },
+        webSocket: {
+          enabled: true,
+          port: 9876
+        },
+        allowExternalConnections: false,
+        authToken: '',
+        autoImportSpecs: true,
+        autoExportResults: true
+      },
+
       customSteps: {
         enabled: true,
         definitions: [],
@@ -432,6 +447,7 @@ export class SettingsManager {
       'reporting',
       'integrations',
       'unitySDK',
+      'runStudioSDK',
       'customSteps',
       'developer',
       'ui'
@@ -465,6 +481,20 @@ export class SettingsManager {
       const port = settings.unitySDK.connection.port
       if (typeof port !== 'number' || port < 1 || port > 65535) {
         errors.push({ path: 'unitySDK.connection.port', message: 'Must be a valid port number (1-65535)' })
+      }
+    }
+
+    if (settings.runStudioSDK?.apiServer?.port !== undefined) {
+      const port = settings.runStudioSDK.apiServer.port
+      if (typeof port !== 'number' || port < 1 || port > 65535) {
+        errors.push({ path: 'runStudioSDK.apiServer.port', message: 'Must be a valid port number (1-65535)' })
+      }
+    }
+
+    if (settings.runStudioSDK?.webSocket?.port !== undefined) {
+      const port = settings.runStudioSDK.webSocket.port
+      if (typeof port !== 'number' || port < 1 || port > 65535) {
+        errors.push({ path: 'runStudioSDK.webSocket.port', message: 'Must be a valid port number (1-65535)' })
       }
     }
 

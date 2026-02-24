@@ -1,6 +1,8 @@
 import { EventEmitter } from 'events'
 import { TestCase, TestStep } from './FileManager'
 import { ADBManager } from '../adb/ADBManager'
+import { UnityBridge } from '../unity/UnityBridge'
+import { HTML5Bridge } from '../html5/HTML5Bridge'
 import { screenshotManager } from '../utils/ScreenshotManager'
 import { reportManager, ExecutionRecord } from '../services/ReportManager'
 import { executionStateManager } from '../services/ExecutionStateManager'
@@ -50,6 +52,8 @@ export class TestRunner extends EventEmitter {
   private prerequisiteVerifier: PrerequisiteVerifier
   private testCaseManager: TestCaseManager
   private dependencyValidator: DependencyValidator
+  private unityBridge: UnityBridge | null = null
+  private html5Bridge: HTML5Bridge | null = null
   private isRunning: boolean = false
   private currentTest: TestCase | null = null
   private shouldStop: boolean = false
@@ -59,13 +63,17 @@ export class TestRunner extends EventEmitter {
     adbManager: ADBManager,
     prerequisiteVerifier: PrerequisiteVerifier,
     testCaseManager: TestCaseManager,
-    dependencyValidator: DependencyValidator
+    dependencyValidator: DependencyValidator,
+    unityBridge?: UnityBridge,
+    html5Bridge?: HTML5Bridge
   ) {
     super()
     this.adbManager = adbManager
     this.prerequisiteVerifier = prerequisiteVerifier
     this.testCaseManager = testCaseManager
     this.dependencyValidator = dependencyValidator
+    this.unityBridge = unityBridge ?? null
+    this.html5Bridge = html5Bridge ?? null
   }
 
   async runTest(
@@ -718,7 +726,21 @@ export class TestRunner extends EventEmitter {
       throw new Error('No coordinates specified for tap')
     }
 
-    // Execute tap
+    // HTML5 element tap: if method is html5Element and bridge is connected, tap via SDK
+    if (step.target?.method === 'html5Element' && this.html5Bridge?.isSDKConnected()) {
+      const elementName = step.target.value
+      if (elementName) {
+        const success = await this.html5Bridge.tapElement(elementName)
+        if (success) {
+          console.log(`[TestRunner] Tapped HTML5 element via SDK: ${elementName}`)
+          if (options?.waitAfter) await this.sleep(options.waitAfter * 1000)
+          return
+        }
+        console.warn(`[TestRunner] HTML5 element tap failed for '${elementName}', falling back to coordinates`)
+      }
+    }
+
+    // Execute coordinate tap
     await this.adbManager.sendTap(deviceId, Math.round(x), Math.round(y))
 
     // Wait after if specified
@@ -838,48 +860,53 @@ export class TestRunner extends EventEmitter {
     console.log(`[TestRunner] Assertion passed in ${duration}ms`)
   }
 
-  // SDK-based assertions (require Unity SDK)
+  // SDK-based assertions (Unity or HTML5 SDK)
   private async assertElementExists(
     deviceId: string,
     target: any,
     timeout: number
   ): Promise<void> {
     const { elementPath, elementName } = target || {}
+    const name = elementPath || elementName
 
-    if (!elementPath && !elementName) {
+    if (!name) {
       throw new Error('Element path or name required for element_exists assertion')
     }
 
-    // Check if Unity SDK is available
-    const sdkAvailable = await this.unityBridge.detectSDK(deviceId)
-    if (!sdkAvailable) {
-      throw new Error('Unity SDK not available - cannot check element existence')
-    }
-
-    const startTime = Date.now()
-    while (Date.now() - startTime < timeout) {
-      try {
-        // Try to find element by path or name
-        const command = elementPath
-          ? { command: 'findElementByPath', path: elementPath }
-          : { command: 'findElementByName', name: elementName }
-
-        const response = await this.unityBridge.sendCommand(deviceId, command)
-
-        if (response.success && response.element) {
-          console.log(`[TestRunner] Element found: ${elementPath || elementName}`)
-          return
-        }
-      } catch (error) {
-        // Continue waiting
+    // HTML5 SDK: check registered elements via getUIElements
+    if (this.html5Bridge?.isSDKConnected()) {
+      const startTime = Date.now()
+      while (Date.now() - startTime < timeout) {
+        try {
+          const elements = await this.html5Bridge.getUIElements()
+          const found = elements.some((el) => (el.path === name || el.name === name) && el.active)
+          if (found) {
+            console.log(`[TestRunner] HTML5 element found: ${name}`)
+            return
+          }
+        } catch { /* continue waiting */ }
+        await this.sleep(500)
       }
-
-      await this.sleep(500)
+      throw new Error(`HTML5 element not found after ${timeout}ms: ${name}`)
     }
 
-    throw new Error(
-      `Element not found after ${timeout}ms: ${elementPath || elementName}`
-    )
+    // Unity SDK: use findElement
+    if (this.unityBridge?.isSDKConnected()) {
+      const startTime = Date.now()
+      while (Date.now() - startTime < timeout) {
+        try {
+          const response = await this.unityBridge.sendCommand({ command: 'findElement', parameters: { name } })
+          if (response.success) {
+            console.log(`[TestRunner] Unity element found: ${name}`)
+            return
+          }
+        } catch { /* continue waiting */ }
+        await this.sleep(500)
+      }
+      throw new Error(`Element not found after ${timeout}ms: ${name}`)
+    }
+
+    throw new Error('No SDK available (Unity or HTML5) - cannot check element existence')
   }
 
   private async assertElementActive(
@@ -888,129 +915,148 @@ export class TestRunner extends EventEmitter {
     timeout: number
   ): Promise<void> {
     const { elementPath, elementName } = target || {}
+    const name = elementPath || elementName
 
-    if (!elementPath && !elementName) {
+    if (!name) {
       throw new Error('Element path or name required for element_active assertion')
     }
 
-    const sdkAvailable = await this.unityBridge.detectSDK(deviceId)
-    if (!sdkAvailable) {
-      throw new Error('Unity SDK not available - cannot check element state')
-    }
-
-    const startTime = Date.now()
-    while (Date.now() - startTime < timeout) {
-      try {
-        const command = elementPath
-          ? { command: 'getElementProperties', path: elementPath }
-          : { command: 'findElementByName', name: elementName }
-
-        const response = await this.unityBridge.sendCommand(deviceId, command)
-
-        if (response.success && response.element && response.element.active) {
-          console.log(`[TestRunner] Element is active: ${elementPath || elementName}`)
-          return
-        }
-      } catch (error) {
-        // Continue waiting
+    // HTML5 SDK: element is active if present and active in getUIElements
+    if (this.html5Bridge?.isSDKConnected()) {
+      const startTime = Date.now()
+      while (Date.now() - startTime < timeout) {
+        try {
+          const elements = await this.html5Bridge.getUIElements()
+          const el = elements.find((e) => e.path === name || e.name === name)
+          if (el?.active) {
+            console.log(`[TestRunner] HTML5 element is active: ${name}`)
+            return
+          }
+        } catch { /* continue waiting */ }
+        await this.sleep(500)
       }
-
-      await this.sleep(500)
+      throw new Error(`HTML5 element not active after ${timeout}ms: ${name}`)
     }
 
-    throw new Error(
-      `Element not active after ${timeout}ms: ${elementPath || elementName}`
-    )
+    if (this.unityBridge?.isSDKConnected()) {
+      const startTime = Date.now()
+      while (Date.now() - startTime < timeout) {
+        try {
+          const response = await this.unityBridge.sendCommand({
+            command: 'getElementProperty',
+            parameters: { path: name, property: 'active' }
+          })
+          if (response.success && response.data?.value === true) {
+            console.log(`[TestRunner] Unity element is active: ${name}`)
+            return
+          }
+        } catch { /* continue waiting */ }
+        await this.sleep(500)
+      }
+      throw new Error(`Element not active after ${timeout}ms: ${name}`)
+    }
+
+    throw new Error('No SDK available (Unity or HTML5) - cannot check element state')
   }
 
   private async assertTextEquals(
-    deviceId: string,
+    _deviceId: string,
     target: any,
     expected: string,
     timeout: number
   ): Promise<void> {
     const { elementPath, elementName } = target || {}
+    const name = elementPath || elementName
 
-    if (!elementPath && !elementName) {
+    if (!name) {
       throw new Error('Element path or name required for text_equals assertion')
     }
 
-    const sdkAvailable = await this.unityBridge.detectSDK(deviceId)
-    if (!sdkAvailable) {
-      throw new Error('Unity SDK not available - cannot check element text')
-    }
-
-    const startTime = Date.now()
-    while (Date.now() - startTime < timeout) {
-      try {
-        const command = elementPath
-          ? { command: 'getElementProperties', path: elementPath }
-          : { command: 'findElementByName', name: elementName }
-
-        const response = await this.unityBridge.sendCommand(deviceId, command)
-
-        if (response.success && response.element) {
-          const actualText = response.element.text || ''
-          if (actualText === expected) {
-            console.log(`[TestRunner] Text matches: "${actualText}"`)
+    // HTML5 SDK: treat element name as a registered custom property
+    if (this.html5Bridge?.isSDKConnected()) {
+      const startTime = Date.now()
+      while (Date.now() - startTime < timeout) {
+        try {
+          const value = await this.html5Bridge.getCustomProperty(name)
+          if (value === expected) {
+            console.log(`[TestRunner] HTML5 property "${name}" equals "${expected}"`)
             return
           }
-        }
-      } catch (error) {
-        // Continue waiting
+        } catch { /* continue waiting */ }
+        await this.sleep(500)
       }
-
-      await this.sleep(500)
+      throw new Error(`Text/property does not match after ${timeout}ms. Expected: "${expected}"`)
     }
 
-    throw new Error(
-      `Text does not match after ${timeout}ms. Expected: "${expected}"`
-    )
+    if (this.unityBridge?.isSDKConnected()) {
+      const startTime = Date.now()
+      while (Date.now() - startTime < timeout) {
+        try {
+          const response = await this.unityBridge.sendCommand({
+            command: 'getElementProperty',
+            parameters: { path: name, property: 'text' }
+          })
+          if (response.success && response.data?.value === expected) {
+            console.log(`[TestRunner] Text matches: "${expected}"`)
+            return
+          }
+        } catch { /* continue waiting */ }
+        await this.sleep(500)
+      }
+      throw new Error(`Text does not match after ${timeout}ms. Expected: "${expected}"`)
+    }
+
+    throw new Error('No SDK available (Unity or HTML5) - cannot check element text')
   }
 
   private async assertTextContains(
-    deviceId: string,
+    _deviceId: string,
     target: any,
     expected: string,
     timeout: number
   ): Promise<void> {
     const { elementPath, elementName } = target || {}
+    const name = elementPath || elementName
 
-    if (!elementPath && !elementName) {
+    if (!name) {
       throw new Error('Element path or name required for text_contains assertion')
     }
 
-    const sdkAvailable = await this.unityBridge.detectSDK(deviceId)
-    if (!sdkAvailable) {
-      throw new Error('Unity SDK not available - cannot check element text')
-    }
-
-    const startTime = Date.now()
-    while (Date.now() - startTime < timeout) {
-      try {
-        const command = elementPath
-          ? { command: 'getElementProperties', path: elementPath }
-          : { command: 'findElementByName', name: elementName }
-
-        const response = await this.unityBridge.sendCommand(deviceId, command)
-
-        if (response.success && response.element) {
-          const actualText = response.element.text || ''
-          if (actualText.includes(expected)) {
-            console.log(`[TestRunner] Text contains: "${expected}" in "${actualText}"`)
+    // HTML5 SDK: treat element name as a registered custom property
+    if (this.html5Bridge?.isSDKConnected()) {
+      const startTime = Date.now()
+      while (Date.now() - startTime < timeout) {
+        try {
+          const value = await this.html5Bridge.getCustomProperty(name)
+          if (value !== null && String(value).includes(expected)) {
+            console.log(`[TestRunner] HTML5 property "${name}" contains "${expected}"`)
             return
           }
-        }
-      } catch (error) {
-        // Continue waiting
+        } catch { /* continue waiting */ }
+        await this.sleep(500)
       }
-
-      await this.sleep(500)
+      throw new Error(`Text/property does not contain "${expected}" after ${timeout}ms`)
     }
 
-    throw new Error(
-      `Text does not contain "${expected}" after ${timeout}ms`
-    )
+    if (this.unityBridge?.isSDKConnected()) {
+      const startTime = Date.now()
+      while (Date.now() - startTime < timeout) {
+        try {
+          const response = await this.unityBridge.sendCommand({
+            command: 'getElementProperty',
+            parameters: { path: name, property: 'text' }
+          })
+          if (response.success && String(response.data?.value || '').includes(expected)) {
+            console.log(`[TestRunner] Text contains: "${expected}"`)
+            return
+          }
+        } catch { /* continue waiting */ }
+        await this.sleep(500)
+      }
+      throw new Error(`Text does not contain "${expected}" after ${timeout}ms`)
+    }
+
+    throw new Error('No SDK available (Unity or HTML5) - cannot check element text')
   }
 
   // Coordinate-based assertion (no SDK required)

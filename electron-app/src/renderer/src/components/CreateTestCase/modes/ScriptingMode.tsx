@@ -1,15 +1,22 @@
 /**
  * ScriptingMode Component
- * Write test cases using YAML scripting language
+ * Write test cases using YAML scripting language.
+ * Supports Android (Unity SDK) and Web HTML5 (RUN.studio / custom SDK) platforms.
  */
 
 import { useState, useEffect } from 'react'
-import { Save, FileText, AlertCircle, CheckCircle2, Sparkles, BookOpen, ChevronDown, ChevronUp } from 'lucide-react'
+import {
+  Save, FileText, AlertCircle, CheckCircle2, Sparkles,
+  BookOpen, ChevronDown, ChevronUp, Smartphone, Globe
+} from 'lucide-react'
 import { TestMetadataForm } from '../TestMetadataForm'
 import { useToast } from '../../Common/ToastProvider'
 import { TemplateLibrary } from './TemplateLibrary'
 
-// GuideItem Component
+type Platform = 'android' | 'web'
+
+// ─── Guide item ───────────────────────────────────────────────────────────────
+
 interface GuideItemProps {
   name: string
   description: string
@@ -26,30 +33,25 @@ function GuideItem({ name, description, example, expanded, onToggle }: GuideItem
         className="w-full flex items-center justify-between px-3 py-2 hover:bg-muted transition-colors text-left"
       >
         <div className="flex-1">
-          <div className="flex items-center gap-2">
-            <code className="text-xs font-semibold text-primary">{name}</code>
-          </div>
+          <code className="text-xs font-semibold text-primary">{name}</code>
           <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
         </div>
-        {expanded ? (
-          <ChevronUp className="w-3 h-3 text-muted-foreground flex-shrink-0 ml-2" />
-        ) : (
-          <ChevronDown className="w-3 h-3 text-muted-foreground flex-shrink-0 ml-2" />
-        )}
+        {expanded
+          ? <ChevronUp className="w-3 h-3 text-muted-foreground shrink-0 ml-2" />
+          : <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0 ml-2" />}
       </button>
       {expanded && (
         <div className="px-3 py-2 bg-muted/50 border-t border-border">
-          <pre className="text-xs text-foreground whitespace-pre-wrap font-mono leading-relaxed">
-            {example}
-          </pre>
+          <pre className="text-xs text-foreground whitespace-pre-wrap font-mono leading-relaxed">{example}</pre>
         </div>
       )}
     </div>
   )
 }
 
-// Example YAML template (matches TemplateLibrary format)
-const DEFAULT_TEMPLATE = `testCase:
+// ─── Default templates ────────────────────────────────────────────────────────
+
+const ANDROID_DEFAULT = `testCase:
   name: "Example Test"
   description: "Describe what this test verifies"
   tags: [smoke, example]
@@ -74,298 +76,205 @@ const DEFAULT_TEMPLATE = `testCase:
       expectedResult: "New screen loads"
 `
 
+const WEB_DEFAULT = `testCase:
+  name: "Web HTML5 Test"
+  description: "Describe what this web test verifies"
+  platform: web
+  tags: [web, smoke]
+  suite: "Default"
+
+  steps:
+    - id: step_1
+      action: navigate
+      url: "https://game.example.com"
+      description: "Open game URL"
+      expectedResult: "Game page loads"
+
+    - id: step_2
+      action: wait_for_element
+      target:
+        selector: ".game-canvas"
+      timeout: 10000
+      description: "Wait for game canvas to be ready"
+      expectedResult: "Canvas is visible"
+
+    - id: step_3
+      action: click
+      target:
+        selector: "#start-button"
+        fallback: {x: 540, y: 400}
+      description: "Click the start button"
+      validation:
+        type: element_visible
+        selector: ".game-screen"
+        timeout: 3000
+      expectedResult: "Game starts"
+
+    - id: step_4
+      action: wait
+      duration: 2000
+      description: "Wait for game to initialize"
+      expectedResult: "Game is running"
+`
+
+// ─── Props ────────────────────────────────────────────────────────────────────
+
 interface Props {
   onSave?: (testCase: any) => void
   onCancel?: () => void
 }
 
+// ─── Component ────────────────────────────────────────────────────────────────
+
 export function ScriptingMode({ onSave, onCancel }: Props) {
-  const [scriptContent, setScriptContent] = useState(DEFAULT_TEMPLATE)
+  const [platform, setPlatform] = useState<Platform>('android')
+  const [scriptContent, setScriptContent] = useState(ANDROID_DEFAULT)
   const [testName, setTestName] = useState('')
   const [testDescription, setTestDescription] = useState('')
   const [testTags, setTestTags] = useState<string[]>([])
   const [selectedSuiteId, setSelectedSuiteId] = useState('')
   const [suites, setSuites] = useState<any[]>([])
-  const [validationStatus, setValidationStatus] = useState<{
-    valid: boolean
-    errors: string[]
-  } | null>(null)
+  const [validationStatus, setValidationStatus] = useState<{ valid: boolean; errors: string[] } | null>(null)
   const [isValidating, setIsValidating] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [showTemplateLibrary, setShowTemplateLibrary] = useState(false)
   const [isUpdatingFromYAML, setIsUpdatingFromYAML] = useState(false)
   const [isUpdatingFromMetadata, setIsUpdatingFromMetadata] = useState(false)
-
-  // Guide state
   const [isGuideExpanded, setIsGuideExpanded] = useState(true)
   const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>({})
 
   const toast = useToast()
 
-  const toggleGuide = () => {
-    setIsGuideExpanded(prev => !prev)
-  }
-
-  const toggleItem = (item: string) => {
+  const toggleItem = (item: string) =>
     setExpandedItems(prev => ({ ...prev, [item]: !prev[item] }))
+
+  // Switch platform: auto-swap default template if user hasn't edited it
+  const handlePlatformSwitch = (next: Platform) => {
+    const currentDefault = platform === 'android' ? ANDROID_DEFAULT : WEB_DEFAULT
+    const nextDefault = next === 'android' ? ANDROID_DEFAULT : WEB_DEFAULT
+    if (scriptContent === currentDefault) {
+      setScriptContent(nextDefault)
+    }
+    setPlatform(next)
   }
 
-  // Suites are loaded via TestMetadataForm's onSuitesLoaded callback
+  // ── YAML ↔ Metadata sync ──────────────────────────────────────────────────
 
-  // Parse metadata from YAML content
   const parseMetadataFromYAML = (yamlContent: string) => {
     try {
       const lines = yamlContent.split('\n')
-      let name = ''
-      let description = ''
-      let tags: string[] = []
-      let suiteName = ''
-      let inTestCase = false
-      let inSteps = false
+      let name = '', description = '', tags: string[] = [], suiteName = ''
+      let inTestCase = false, inSteps = false
 
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i]
+      for (const line of lines) {
         const trimmed = line.trim()
-
-        // Track if we're inside testCase or steps
-        if (trimmed.startsWith('testCase:')) {
-          inTestCase = true
-          continue
-        }
-        if (trimmed.startsWith('steps:')) {
-          inSteps = true
-          continue
-        }
-
-        // Only parse metadata inside testCase and before steps
+        if (trimmed.startsWith('testCase:')) { inTestCase = true; continue }
+        if (trimmed.startsWith('steps:')) { inSteps = true; continue }
         if (!inTestCase || inSteps) continue
 
-        // Parse name (must be at root level, 2 spaces indentation)
         if (line.startsWith('  name:') && !line.startsWith('    ')) {
-          const match = trimmed.match(/name:\s*["'](.+?)["']/)
-          if (match) name = match[1]
+          const m = trimmed.match(/name:\s*["'](.+?)["']/)
+          if (m) name = m[1]
         }
-
-        // Parse description (must be at root level, 2 spaces indentation)
         if (line.startsWith('  description:') && !line.startsWith('    ')) {
-          const match = trimmed.match(/description:\s*["'](.+?)["']/)
-          if (match) description = match[1]
+          const m = trimmed.match(/description:\s*["'](.+?)["']/)
+          if (m) description = m[1]
         }
-
-        // Parse tags (must be at root level, 2 spaces indentation)
         if (line.startsWith('  tags:') && !line.startsWith('    ')) {
-          const match = trimmed.match(/tags:\s*\[(.+?)\]/)
-          if (match) {
-            tags = match[1].split(',').map(t => t.trim().replace(/["']/g, ''))
-          }
+          const m = trimmed.match(/tags:\s*\[(.+?)\]/)
+          if (m) tags = m[1].split(',').map(t => t.trim().replace(/["']/g, ''))
         }
-
-        // Parse suite (must be at root level, 2 spaces indentation)
         if (line.startsWith('  suite:') && !line.startsWith('    ')) {
-          const match = trimmed.match(/suite:\s*["'](.+?)["']/)
-          if (match) suiteName = match[1]
+          const m = trimmed.match(/suite:\s*["'](.+?)["']/)
+          if (m) suiteName = m[1]
         }
       }
-
       return { name, description, tags, suiteName }
-    } catch (error) {
-      console.error('Failed to parse metadata from YAML:', error)
+    } catch {
       return null
     }
   }
 
-  // Update YAML content with new metadata
   const updateYAMLMetadata = (name: string, description: string, tags: string[], suiteName: string) => {
-    try {
-      let updated = scriptContent
-
-      // Update name
-      updated = updated.replace(
-        /name:\s*["'].+?["']/,
-        `name: "${name}"`
-      )
-
-      // Update description
-      updated = updated.replace(
-        /description:\s*["'].+?["']/,
-        `description: "${description}"`
-      )
-
-      // Update tags
-      const tagsStr = tags.map(t => t).join(', ')
-      updated = updated.replace(
-        /tags:\s*\[.+?\]/,
-        `tags: [${tagsStr}]`
-      )
-
-      // Update suite
-      updated = updated.replace(
-        /suite:\s*["'].*?["']/,
-        `suite: "${suiteName}"`
-      )
-
-      return updated
-    } catch (error) {
-      console.error('Failed to update YAML metadata:', error)
-      return scriptContent
-    }
+    let updated = scriptContent
+    updated = updated.replace(/name:\s*["'].+?["']/, `name: "${name}"`)
+    updated = updated.replace(/description:\s*["'].+?["']/, `description: "${description}"`)
+    updated = updated.replace(/tags:\s*\[.+?\]/, `tags: [${tags.join(', ')}]`)
+    updated = updated.replace(/suite:\s*["'].*?["']/, `suite: "${suiteName}"`)
+    return updated
   }
 
-  // Sync YAML → Metadata (when YAML changes)
   useEffect(() => {
-    if (isUpdatingFromMetadata) return
-    if (suites.length === 0) return
-
+    if (isUpdatingFromMetadata || suites.length === 0) return
     const metadata = parseMetadataFromYAML(scriptContent)
-    if (metadata) {
-      setIsUpdatingFromYAML(true)
-
-      if (metadata.name && metadata.name !== testName) {
-        setTestName(metadata.name)
-      }
-      if (metadata.description && metadata.description !== testDescription) {
-        setTestDescription(metadata.description)
-      }
-      if (metadata.tags.length > 0 && JSON.stringify(metadata.tags) !== JSON.stringify(testTags)) {
-        setTestTags(metadata.tags)
-      }
-
-      // Convert suite name to suite ID
-      if (metadata.suiteName) {
-        const suite = suites.find(s => s.name === metadata.suiteName)
-        if (suite && suite.id !== selectedSuiteId) {
-          setSelectedSuiteId(suite.id)
-        }
-      }
-
-      setTimeout(() => {
-        setIsUpdatingFromYAML(false)
-      }, 100)
+    if (!metadata) return
+    setIsUpdatingFromYAML(true)
+    if (metadata.name && metadata.name !== testName) setTestName(metadata.name)
+    if (metadata.description && metadata.description !== testDescription) setTestDescription(metadata.description)
+    if (metadata.tags.length > 0 && JSON.stringify(metadata.tags) !== JSON.stringify(testTags)) setTestTags(metadata.tags)
+    if (metadata.suiteName) {
+      const suite = suites.find(s => s.name === metadata.suiteName)
+      if (suite && suite.id !== selectedSuiteId) setSelectedSuiteId(suite.id)
     }
+    setTimeout(() => setIsUpdatingFromYAML(false), 100)
   }, [scriptContent, suites])
 
-  // Sync Metadata → YAML (when metadata changes)
   useEffect(() => {
-    if (isUpdatingFromYAML) return
-    if (suites.length === 0) return
-
-    // Don't run on initial mount - wait until testName has a value
-    // This prevents overwriting DEFAULT_TEMPLATE with empty values
-    if (!testName) {
-      return
-    }
-
+    if (isUpdatingFromYAML || suites.length === 0 || !testName) return
     setIsUpdatingFromMetadata(true)
-
-    // Convert suite ID to suite name
     const suite = suites.find(s => s.id === selectedSuiteId)
     const suiteName = suite ? suite.name : ''
-
     const updated = updateYAMLMetadata(testName, testDescription, testTags, suiteName)
-    if (updated !== scriptContent) {
-      setScriptContent(updated)
-    }
-
-    setTimeout(() => {
-      setIsUpdatingFromMetadata(false)
-    }, 100)
+    if (updated !== scriptContent) setScriptContent(updated)
+    setTimeout(() => setIsUpdatingFromMetadata(false), 100)
   }, [testName, testDescription, testTags, selectedSuiteId, suites])
 
-  // Auto-validate script on change (debounced)
+  // Auto-validate on change (debounced)
   useEffect(() => {
-    // Check if API is available
-    if (!window.api?.script?.validate) {
-      console.error('Script API not available')
-      return
-    }
-
-    const timer = setTimeout(() => {
-      validateScript()
-    }, 500)
-
+    if (!window.api?.script?.validate) return
+    const timer = setTimeout(validateScript, 500)
     return () => clearTimeout(timer)
   }, [scriptContent])
 
   const validateScript = async () => {
-    // Safety check
     if (!window.api?.script?.validate) {
-      setValidationStatus({
-        valid: false,
-        errors: ['Script validation API not available']
-      })
+      setValidationStatus({ valid: false, errors: ['Script validation API not available'] })
       return
     }
-
     setIsValidating(true)
-
     try {
       const result = await window.api.script.validate(scriptContent, 'yaml')
-
       if (result.success && result.validation) {
         setValidationStatus({
           valid: result.validation.valid,
           errors: result.validation.errors.map((e: any) => e.message)
         })
       } else {
-        setValidationStatus({
-          valid: false,
-          errors: [result.error || 'Validation failed']
-        })
+        setValidationStatus({ valid: false, errors: [result.error || 'Validation failed'] })
       }
     } catch (error) {
-      setValidationStatus({
-        valid: false,
-        errors: [error instanceof Error ? error.message : 'Validation failed']
-      })
+      setValidationStatus({ valid: false, errors: [error instanceof Error ? error.message : 'Validation failed'] })
     } finally {
       setIsValidating(false)
     }
   }
 
   const handleSave = async () => {
-    // Safety check
-    if (!window.api?.script?.toTestCase) {
-      toast.error('Script API not available')
-      return
-    }
-
-    if (!validationStatus?.valid) {
-      toast.error('Please fix validation errors before saving')
-      return
-    }
-
-    if (!testName.trim()) {
-      toast.error('Please enter a test name')
-      return
-    }
-
-    if (!selectedSuiteId) {
-      toast.error('Please select a target suite')
-      return
-    }
+    if (!window.api?.script?.toTestCase) { toast.error('Script API not available'); return }
+    if (!validationStatus?.valid) { toast.error('Please fix validation errors before saving'); return }
+    if (!testName.trim()) { toast.error('Please enter a test name'); return }
+    if (!selectedSuiteId) { toast.error('Please select a target suite'); return }
 
     setIsSaving(true)
-
     try {
-      // Create test case from script
       const result = await window.api.script.toTestCase(scriptContent, selectedSuiteId, {
-        name: testName,
-        description: testDescription,
-        tags: testTags
+        name: testName, description: testDescription, tags: testTags
       })
-
       if (result.success) {
         toast.success(result.message || 'Test case created successfully!')
-
-        if (onSave) {
-          onSave(result.testCase)
-        }
-
-        // Reset form
-        setTestName('')
-        setTestDescription('')
-        setTestTags([])
-        setScriptContent(DEFAULT_TEMPLATE)
+        if (onSave) onSave(result.testCase)
+        setTestName(''); setTestDescription(''); setTestTags([])
+        setScriptContent(platform === 'web' ? WEB_DEFAULT : ANDROID_DEFAULT)
       } else {
         toast.error(result.error || 'Failed to create test case')
       }
@@ -376,21 +285,49 @@ export function ScriptingMode({ onSave, onCancel }: Props) {
     }
   }
 
-  const handleAISuggestSteps = async () => {
-    // TODO: Implement AI step suggestions
-    toast.info('AI suggestions coming soon!')
-  }
-
   const handleLoadTemplate = (template: string) => {
     setScriptContent(template)
-    toast.success('Template loaded successfully!')
+    // Detect platform from loaded template
+    if (template.includes('platform: web')) setPlatform('web')
+    else if (template.includes('action: tap') || template.includes('action: swipe')) setPlatform('android')
+    toast.success('Template loaded!')
   }
+
+  // ─── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div className="flex h-full">
-      {/* Left Panel - Metadata */}
-      <div className="w-[300px] border-r border-border bg-card p-4 overflow-auto">
-        <h3 className="text-lg font-semibold text-foreground mb-4">Test Metadata</h3>
+      {/* Left Panel — Metadata */}
+      <div className="w-[300px] border-r border-border bg-card p-4 overflow-auto flex flex-col gap-4">
+        {/* Platform toggle */}
+        <div>
+          <p className="text-xs font-medium text-muted-foreground mb-2">Platform</p>
+          <div className="flex items-center gap-1 bg-muted/50 rounded-lg p-1">
+            <button
+              onClick={() => handlePlatformSwitch('android')}
+              className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs rounded-md transition-all ${
+                platform === 'android'
+                  ? 'bg-card text-foreground shadow-sm font-medium'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <Smartphone className="w-3 h-3" />
+              Android
+            </button>
+            <button
+              onClick={() => handlePlatformSwitch('web')}
+              className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs rounded-md transition-all ${
+                platform === 'web'
+                  ? 'bg-card text-foreground shadow-sm font-medium'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <Globe className="w-3 h-3" />
+              Web HTML5
+            </button>
+          </div>
+        </div>
+
         <TestMetadataForm
           testName={testName}
           testDescription={testDescription}
@@ -405,17 +342,19 @@ export function ScriptingMode({ onSave, onCancel }: Props) {
         />
       </div>
 
-      {/* Center Panel - YAML Editor */}
+      {/* Center Panel — YAML Editor */}
       <div className="flex-1 flex flex-col">
         {/* Editor Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-card">
           <div className="flex items-center gap-2">
             <FileText className="w-4 h-4 text-muted-foreground" />
             <span className="text-sm font-medium text-foreground">Test Script (YAML)</span>
+            {platform === 'web' && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400 font-medium">Web HTML5</span>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Validation Status */}
             {isValidating ? (
               <div className="flex items-center gap-1 text-xs text-muted-foreground">
                 <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
@@ -426,39 +365,33 @@ export function ScriptingMode({ onSave, onCancel }: Props) {
                 <CheckCircle2 className="w-3 h-3" />
                 Valid
               </div>
-            ) : validationStatus?.errors && validationStatus.errors.length > 0 ? (
+            ) : validationStatus?.errors?.length ? (
               <div className="flex items-center gap-1 text-xs text-destructive">
                 <AlertCircle className="w-3 h-3" />
                 {validationStatus.errors.length} error(s)
               </div>
             ) : null}
 
-            {/* Load Template Button */}
             <button
               onClick={() => setShowTemplateLibrary(true)}
               className="flex items-center gap-1 px-2 py-1 text-xs text-primary hover:bg-primary/10 rounded transition-colors"
-              title="Load template"
             >
               <BookOpen className="w-3 h-3" />
               Templates
             </button>
 
-            {/* AI Suggest Button */}
             <button
-              onClick={handleAISuggestSteps}
+              onClick={() => toast.info('AI suggestions coming soon!')}
               className="flex items-center gap-1 px-2 py-1 text-xs text-primary hover:bg-primary/10 rounded transition-colors"
-              title="AI suggest steps"
             >
               <Sparkles className="w-3 h-3" />
               AI Suggest
             </button>
 
-            {/* Show Guide Button (when guide is hidden) */}
             {!isGuideExpanded && (
               <button
-                onClick={toggleGuide}
+                onClick={() => setIsGuideExpanded(true)}
                 className="flex items-center gap-1 px-2 py-1 text-xs text-primary hover:bg-primary/10 rounded transition-colors"
-                title="Show YAML guide"
               >
                 <BookOpen className="w-3 h-3" />
                 Guide
@@ -473,12 +406,7 @@ export function ScriptingMode({ onSave, onCancel }: Props) {
             value={scriptContent}
             onChange={(e) => setScriptContent(e.target.value)}
             className="w-full h-full p-4 bg-[#1e1e1e] text-[#d4d4d4] font-mono text-sm resize-none focus:outline-none"
-            style={{
-              fontFamily: 'Consolas, "Courier New", monospace',
-              fontSize: '13px',
-              lineHeight: '1.5',
-              tabSize: 2
-            }}
+            style={{ fontFamily: 'Consolas, "Courier New", monospace', fontSize: '13px', lineHeight: '1.5', tabSize: 2 }}
             spellCheck={false}
             placeholder="Write your YAML test script here or load a template..."
           />
@@ -488,26 +416,21 @@ export function ScriptingMode({ onSave, onCancel }: Props) {
         {validationStatus && !validationStatus.valid && validationStatus.errors.length > 0 && (
           <div className="border-t border-border bg-destructive/10 p-3">
             <div className="flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 text-destructive flex-shrink-0 mt-0.5" />
+              <AlertCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
               <div className="flex-1">
                 <p className="text-sm font-medium text-destructive mb-1">Validation Errors:</p>
                 <ul className="list-disc list-inside text-xs text-destructive/80 space-y-0.5">
-                  {validationStatus.errors.map((error, index) => (
-                    <li key={index}>{error}</li>
-                  ))}
+                  {validationStatus.errors.map((err, i) => <li key={i}>{err}</li>)}
                 </ul>
               </div>
             </div>
           </div>
         )}
 
-        {/* Editor Footer - Actions */}
+        {/* Footer */}
         <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-border bg-card">
           {onCancel && (
-            <button
-              onClick={onCancel}
-              className="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors"
-            >
+            <button onClick={onCancel} className="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors">
               Cancel
             </button>
           )}
@@ -522,173 +445,104 @@ export function ScriptingMode({ onSave, onCancel }: Props) {
         </div>
       </div>
 
-      {/* Right Panel - YAML Guide (Conditionally Rendered) */}
+      {/* Right Panel — Guide (platform-aware) */}
       {isGuideExpanded && (
         <div className="w-[320px] border-l border-border bg-card flex flex-col">
-          {/* Guide Header */}
           <button
-            onClick={toggleGuide}
+            onClick={() => setIsGuideExpanded(false)}
             className="flex items-center justify-between px-4 py-3 border-b border-border hover:bg-muted transition-colors"
           >
-            <h3 className="text-lg font-semibold text-foreground">YAML Guide</h3>
-            <ChevronUp className="w-5 h-5 text-muted-foreground" />
+            <h3 className="text-sm font-semibold text-foreground">
+              YAML Guide
+              {platform === 'web' && <span className="ml-2 text-[10px] text-blue-400 font-normal">Web HTML5</span>}
+            </h3>
+            <ChevronUp className="w-4 h-4 text-muted-foreground" />
           </button>
 
-          {/* Guide Content */}
-          <div className="flex-1 overflow-auto p-4 space-y-2">
-            {/* Test Metadata */}
-            <div className="space-y-1">
-              <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">Test Metadata</p>
+          <div className="flex-1 overflow-auto p-3 space-y-0.5 text-xs">
 
-              <GuideItem
-                name="name"
-                description="Test case name"
-                example='name: "Example Test"'
-                expanded={expandedItems['name']}
-                onToggle={() => toggleItem('name')}
-              />
+            {/* ── Shared: Test Metadata ─────────────────────────────────── */}
+            <GuideSection label="Test Metadata">
+              <GuideItem name="name" description="Test case name" example='name: "Login Test"' expanded={expandedItems['name']} onToggle={() => toggleItem('name')} />
+              <GuideItem name="description" description="What this test verifies" example='description: "Verify login works"' expanded={expandedItems['desc']} onToggle={() => toggleItem('desc')} />
+              <GuideItem name="tags" description="Test categories" example='tags: [smoke, critical]' expanded={expandedItems['tags']} onToggle={() => toggleItem('tags')} />
+              <GuideItem name="suite" description="Target suite name" example='suite: "Default"' expanded={expandedItems['suite']} onToggle={() => toggleItem('suite')} />
+              {platform === 'web' && (
+                <GuideItem name="platform" description="Must be 'web' for HTML5 tests" example='platform: web' expanded={expandedItems['platform']} onToggle={() => toggleItem('platform')} />
+              )}
+            </GuideSection>
 
-              <GuideItem
-                name="description"
-                description="What this test verifies"
-                example='description: "Verify login functionality"'
-                expanded={expandedItems['description']}
-                onToggle={() => toggleItem('description')}
-              />
+            {/* ── Android Actions ─────────────────────────────────────────── */}
+            {platform === 'android' && (
+              <GuideSection label="Actions">
+                <GuideItem name="tap" description="Tap element or coordinates" example={`action: tap\ntarget:\n  element: "/Canvas/UI/Button"\n  fallback: {x: 540, y: 960}`} expanded={expandedItems['tap']} onToggle={() => toggleItem('tap')} />
+                <GuideItem name="swipe" description="Swipe gesture" example={`action: swipe\ntarget:\n  fallback: {x: 540, y: 960}\ndata:\n  direction: "left"\n  distance: 500\n  duration: 300`} expanded={expandedItems['swipe']} onToggle={() => toggleItem('swipe')} />
+                <GuideItem name="input" description="Enter text in field" example={`action: input\ntarget:\n  element: "/Canvas/LoginPanel/UsernameField"\nvalue: "testuser"`} expanded={expandedItems['input']} onToggle={() => toggleItem('input')} />
+                <GuideItem name="wait" description="Wait for duration (ms)" example={`action: wait\nduration: 2000`} expanded={expandedItems['wait']} onToggle={() => toggleItem('wait')} />
+              </GuideSection>
+            )}
 
-              <GuideItem
-                name="tags"
-                description="Test categories"
-                example='tags: [smoke, critical, authentication]'
-                expanded={expandedItems['tags']}
-                onToggle={() => toggleItem('tags')}
-              />
+            {/* ── Web Actions ──────────────────────────────────────────────── */}
+            {platform === 'web' && (
+              <GuideSection label="Web Actions">
+                <GuideItem name="navigate" description="Go to a URL" example={`action: navigate\nurl: "https://game.example.com"\ndescription: "Open game"`} expanded={expandedItems['navigate']} onToggle={() => toggleItem('navigate')} />
+                <GuideItem name="click" description="Click CSS selector or coordinates" example={`action: click\ntarget:\n  selector: "#start-btn"\n  fallback: {x: 540, y: 400}`} expanded={expandedItems['click']} onToggle={() => toggleItem('click')} />
+                <GuideItem name="type" description="Type text into a field" example={`action: type\ntarget:\n  selector: "input#username"\nvalue: "testuser"`} expanded={expandedItems['type']} onToggle={() => toggleItem('type')} />
+                <GuideItem name="scroll" description="Scroll the page" example={`action: scroll\ndata:\n  deltaX: 0\n  deltaY: 300`} expanded={expandedItems['scroll']} onToggle={() => toggleItem('scroll')} />
+                <GuideItem name="wait_for_element" description="Wait until a CSS element appears" example={`action: wait_for_element\ntarget:\n  selector: ".game-canvas"\ntimeout: 10000`} expanded={expandedItems['wfe']} onToggle={() => toggleItem('wfe')} />
+                <GuideItem name="execute_js" description="Run arbitrary JavaScript" example={`action: execute_js\nscript: "window.game.addCoins(100)"\ndescription: "Add coins via JS"`} expanded={expandedItems['execjs']} onToggle={() => toggleItem('execjs')} />
+                <GuideItem name="wait" description="Wait fixed duration (ms)" example={`action: wait\nduration: 2000`} expanded={expandedItems['wait']} onToggle={() => toggleItem('wait')} />
+              </GuideSection>
+            )}
 
-              <GuideItem
-                name="suite"
-                description="Target test suite"
-                example='suite: "Default"'
-                expanded={expandedItems['suite']}
-                onToggle={() => toggleItem('suite')}
-              />
-            </div>
+            {/* ── Validation ───────────────────────────────────────────────── */}
+            <GuideSection label="Validation">
+              {platform === 'android' && <>
+                <GuideItem name="element_exists" description="Element is present in hierarchy" example={`validation:\n  type: element_exists\n  target: "/Canvas/UI/Button"\n  timeout: 3000`} expanded={expandedItems['ee']} onToggle={() => toggleItem('ee')} />
+                <GuideItem name="element_active" description="Element is active/enabled" example={`validation:\n  type: element_active\n  target: "/Canvas/UI/Button"\n  timeout: 2000`} expanded={expandedItems['ea']} onToggle={() => toggleItem('ea')} />
+                <GuideItem name="text_contains" description="Element text contains string" example={`validation:\n  type: text_contains\n  target: "/Canvas/UI/Label"\n  expected: "Welcome"\n  timeout: 2000`} expanded={expandedItems['tc']} onToggle={() => toggleItem('tc')} />
+                <GuideItem name="screenshot_match" description="Visual comparison" example={`validation:\n  type: screenshot_match\n  threshold: 0.85\n  timeout: 2000`} expanded={expandedItems['ss']} onToggle={() => toggleItem('ss')} />
+              </>}
+              {platform === 'web' && <>
+                <GuideItem name="element_visible" description="CSS element is visible in DOM" example={`validation:\n  type: element_visible\n  selector: ".game-screen"\n  timeout: 3000`} expanded={expandedItems['ev']} onToggle={() => toggleItem('ev')} />
+                <GuideItem name="element_not_visible" description="CSS element is hidden/removed" example={`validation:\n  type: element_not_visible\n  selector: ".loading-spinner"\n  timeout: 5000`} expanded={expandedItems['env']} onToggle={() => toggleItem('env')} />
+                <GuideItem name="text_contains" description="Element text contains string" example={`validation:\n  type: text_contains\n  selector: ".score"\n  expected: "100"\n  timeout: 2000`} expanded={expandedItems['tc']} onToggle={() => toggleItem('tc')} />
+                <GuideItem name="url_contains" description="Current URL contains string" example={`validation:\n  type: url_contains\n  expected: "/game/level-2"\n  timeout: 2000`} expanded={expandedItems['uc']} onToggle={() => toggleItem('uc')} />
+                <GuideItem name="value_equals" description="SDK property equals expected" example={`validation:\n  type: value_equals\n  expected: "0"`} expanded={expandedItems['ve']} onToggle={() => toggleItem('ve')} />
+              </>}
+            </GuideSection>
 
-            {/* Actions */}
-            <div className="space-y-1 pt-3 border-t border-border">
-              <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">Actions</p>
+            {/* ── Test Behavior ─────────────────────────────────────────────── */}
+            <GuideSection label="Test Behavior">
+              <GuideItem name="expectedOutcome" description="Expected result (pass/fail)" example={`expectedOutcome: fail\n# Use "fail" for negative tests`} expanded={expandedItems['eo']} onToggle={() => toggleItem('eo')} />
+              <GuideItem name="continueOnFailure" description="Continue test on failure" example={`continueOnFailure: true\n# true = non-blocking step`} expanded={expandedItems['cof']} onToggle={() => toggleItem('cof')} />
+            </GuideSection>
 
-              <GuideItem
-                name="tap"
-                description="Tap element or coordinates"
-                example={`action: tap\ntarget:\n  element: "/Canvas/UI/Button"\n  fallback: {x: 540, y: 960}`}
-                expanded={expandedItems['tap']}
-                onToggle={() => toggleItem('tap')}
-              />
+            {/* ── Android: Unity SDK ─────────────────────────────────────── */}
+            {platform === 'android' && (
+              <GuideSection label="Unity SDK" badge={{ text: 'Required', color: 'yellow' }}>
+                <div className="bg-yellow-500/10 border border-yellow-500/30 rounded p-2 mb-1">
+                  <p className="text-[10px] text-yellow-600 dark:text-yellow-400">
+                    Element-based testing requires PlayGuard SDK integrated in your Unity project.
+                  </p>
+                </div>
+                <GuideItem name="element" description="Unity GameObject path" example={`target:\n  element: "/Canvas/MainMenu/PlayButton"\n  fallback: {x: 540, y: 960}`} expanded={expandedItems['el']} onToggle={() => toggleItem('el')} />
+              </GuideSection>
+            )}
 
-              <GuideItem
-                name="swipe"
-                description="Swipe gesture"
-                example={`action: swipe\ntarget:\n  fallback: {x: 540, y: 960}\ndata:\n  direction: "left"\n  distance: 500\n  duration: 300`}
-                expanded={expandedItems['swipe']}
-                onToggle={() => toggleItem('swipe')}
-              />
-
-              <GuideItem
-                name="input"
-                description="Enter text in field"
-                example={`action: input\ntarget:\n  element: "/Canvas/LoginPanel/UsernameField"\n  fallback: {x: 540, y: 700}\nvalue: "testuser"`}
-                expanded={expandedItems['input']}
-                onToggle={() => toggleItem('input')}
-              />
-
-              <GuideItem
-                name="wait"
-                description="Wait for duration (ms)"
-                example='action: wait\nduration: 2000'
-                expanded={expandedItems['wait']}
-                onToggle={() => toggleItem('wait')}
-              />
-            </div>
-
-            {/* Validation */}
-            <div className="space-y-1 pt-3 border-t border-border">
-              <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">Validation</p>
-
-              <GuideItem
-                name="element_exists"
-                description="Element is present"
-                example={`validation:\n  type: element_exists\n  target: "/Canvas/UI/Button"\n  timeout: 3000`}
-                expanded={expandedItems['element_exists']}
-                onToggle={() => toggleItem('element_exists')}
-              />
-
-              <GuideItem
-                name="element_active"
-                description="Element is active/enabled"
-                example={`validation:\n  type: element_active\n  target: "/Canvas/UI/Button"\n  timeout: 2000`}
-                expanded={expandedItems['element_active']}
-                onToggle={() => toggleItem('element_active')}
-              />
-
-              <GuideItem
-                name="text_contains"
-                description="Text contains string"
-                example={`validation:\n  type: text_contains\n  target: "/Canvas/UI/Label"\n  expected: "Welcome"\n  timeout: 2000`}
-                expanded={expandedItems['text_contains']}
-                onToggle={() => toggleItem('text_contains')}
-              />
-
-              <GuideItem
-                name="screenshot_match"
-                description="Visual comparison"
-                example={`validation:\n  type: screenshot_match\n  threshold: 0.85\n  timeout: 2000`}
-                expanded={expandedItems['screenshot_match']}
-                onToggle={() => toggleItem('screenshot_match')}
-              />
-            </div>
-
-            {/* Test Behavior */}
-            <div className="space-y-1 pt-3 border-t border-border">
-              <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">Test Behavior</p>
-
-              <GuideItem
-                name="expectedOutcome"
-                description="Expected result (pass/fail)"
-                example='expectedOutcome: fail\n# Use "fail" for negative tests'
-                expanded={expandedItems['expectedOutcome']}
-                onToggle={() => toggleItem('expectedOutcome')}
-              />
-
-              <GuideItem
-                name="continueOnFailure"
-                description="Continue test on failure"
-                example='continueOnFailure: true\n# true = non-blocking step'
-                expanded={expandedItems['continueOnFailure']}
-                onToggle={() => toggleItem('continueOnFailure')}
-              />
-            </div>
-
-            {/* Unity SDK */}
-            <div className="space-y-1 pt-3 border-t border-border">
-              <div className="flex items-center gap-2 mb-2">
-                <p className="text-xs font-semibold text-muted-foreground uppercase">Unity SDK</p>
-                <span className="text-xs px-1.5 py-0.5 bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 rounded">Required</span>
-              </div>
-
-              <div className="bg-yellow-500/10 border border-yellow-500/30 rounded p-2 mb-2">
-                <p className="text-xs text-yellow-600 dark:text-yellow-400">
-                  ⚠️ Element-based testing only works with PlayGuard SDK integrated in your Unity project.
-                </p>
-              </div>
-
-              <GuideItem
-                name="element"
-                description="Unity GameObject path"
-                example={`target:\n  element: "/Canvas/MainMenu/PlayButton"\n  fallback: {x: 540, y: 960}\n# Follows GameObject hierarchy`}
-                expanded={expandedItems['element']}
-                onToggle={() => toggleItem('element')}
-              />
-            </div>
+            {/* ── Web: RUN.studio / HTML5 SDK ──────────────────────────────── */}
+            {platform === 'web' && (
+              <GuideSection label="RUN.studio SDK" badge={{ text: 'Optional', color: 'blue' }}>
+                <div className="bg-blue-500/10 border border-blue-500/30 rounded p-2 mb-1">
+                  <p className="text-[10px] text-blue-400">
+                    Integrate the PlayGuard HTML5 SDK in your game to expose custom properties and actions for deeper testing.
+                  </p>
+                </div>
+                <GuideItem name="sdk_property" description="Read a named game property" example={`action: sdk_property\nname: "playerScore"\ndescription: "Read player score"\nvalidation:\n  type: value_equals\n  expected: "0"`} expanded={expandedItems['sdkp']} onToggle={() => toggleItem('sdkp')} />
+                <GuideItem name="sdk_action" description="Execute a registered game action" example={`action: sdk_action\nname: "addCoins"\nargs: ["100"]\ndescription: "Give player 100 coins"`} expanded={expandedItems['sdka']} onToggle={() => toggleItem('sdka')} />
+                <GuideItem name="sdk_command" description="Execute a custom SDK command" example={`action: sdk_command\nname: "setLevel"\nparam: "5"\ndescription: "Jump to level 5"`} expanded={expandedItems['sdkc']} onToggle={() => toggleItem('sdkc')} />
+              </GuideSection>
+            )}
           </div>
         </div>
       )}
@@ -698,8 +552,38 @@ export function ScriptingMode({ onSave, onCancel }: Props) {
         <TemplateLibrary
           onSelectTemplate={handleLoadTemplate}
           onClose={() => setShowTemplateLibrary(false)}
+          platform={platform}
         />
       )}
+    </div>
+  )
+}
+
+// ─── Guide section wrapper ────────────────────────────────────────────────────
+
+function GuideSection({
+  label,
+  badge,
+  children
+}: {
+  label: string
+  badge?: { text: string; color: 'yellow' | 'blue' | 'green' }
+  children: React.ReactNode
+}) {
+  const badgeClasses = {
+    yellow: 'bg-yellow-500/10 text-yellow-500',
+    blue: 'bg-blue-500/10 text-blue-400',
+    green: 'bg-green-500/10 text-green-400'
+  }
+  return (
+    <div className="pt-3 first:pt-0">
+      <div className="flex items-center gap-2 mb-1.5 px-1">
+        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">{label}</p>
+        {badge && (
+          <span className={`text-[9px] px-1 py-0.5 rounded font-medium ${badgeClasses[badge.color]}`}>{badge.text}</span>
+        )}
+      </div>
+      <div className="space-y-1">{children}</div>
     </div>
   )
 }

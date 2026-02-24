@@ -158,11 +158,32 @@ export default function TestRunner({ onNavigateToReports }: TestRunnerProps): JS
   }
 
   const loadDevices = async (): Promise<void> => {
+    const BROWSER_LABELS: Record<string, string> = {
+      chromium: 'Chromium (Built-in)',
+      chrome: 'Google Chrome',
+      edge: 'Microsoft Edge',
+      firefox: 'Mozilla Firefox'
+    }
     try {
-      const deviceList = await window.api.adb.getDevices()
-      setDevices(deviceList)
-      if (deviceList.length > 0 && !selectedDevice) {
-        setSelectedDevice(deviceList[0].id)
+      const [adbList, detectedTypes] = await Promise.all([
+        window.api.adb.getDevices().catch(() => []),
+        window.api.browserDevice.detectBrowsers().catch(() => [] as string[])
+      ])
+
+      const allBrowserTypes = ['chromium', ...(detectedTypes as string[]).filter((t) => t !== 'chromium')]
+      const browserDevices = allBrowserTypes.map((t) => ({
+        id: `browser_${t}`,
+        model: BROWSER_LABELS[t] ?? t,
+        manufacturer: 'Browser',
+        androidVersion: '',
+        resolution: 'browser',
+        type: 'browser'
+      }))
+
+      const combined = [...adbList, ...browserDevices]
+      setDevices(combined)
+      if (combined.length > 0 && !selectedDevice) {
+        setSelectedDevice(combined[0].id)
       }
     } catch (error) {
       console.error('Failed to load devices:', error)
@@ -556,6 +577,41 @@ export default function TestRunner({ onNavigateToReports }: TestRunnerProps): JS
             </button>
           </div>
 
+          {/* Device Selector */}
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Target Device</label>
+            <select
+              value={selectedDevice}
+              onChange={(e) => setSelectedDevice(e.target.value)}
+              className="w-full px-3 py-2 rounded-lg bg-background border border-border text-foreground text-sm"
+            >
+              {devices.length === 0 ? (
+                <option>No devices connected</option>
+              ) : (
+                <>
+                  {devices.filter(d => !d.id.startsWith('browser_')).length > 0 && (
+                    <optgroup label="Android Devices">
+                      {devices.filter(d => !d.id.startsWith('browser_')).map((device) => (
+                        <option key={device.id} value={device.id}>
+                          {device.model} ({device.id})
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {devices.filter(d => d.id.startsWith('browser_')).length > 0 && (
+                    <optgroup label="Web Browsers">
+                      {devices.filter(d => d.id.startsWith('browser_')).map((device) => (
+                        <option key={device.id} value={device.id}>
+                          {device.model}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </>
+              )}
+            </select>
+          </div>
+
           {/* Suite Selector */}
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Test Suite</label>
@@ -574,26 +630,6 @@ export default function TestRunner({ onNavigateToReports }: TestRunnerProps): JS
                 suites.map((suite) => (
                   <option key={suite.id} value={suite.id}>
                     {suite.name} ({suite.testCaseIds.length} tests)
-                  </option>
-                ))
-              )}
-            </select>
-          </div>
-
-          {/* Device Selector */}
-          <div>
-            <label className="text-xs text-muted-foreground mb-1 block">Target Device</label>
-            <select
-              value={selectedDevice}
-              onChange={(e) => setSelectedDevice(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg bg-background border border-border text-foreground text-sm"
-            >
-              {devices.length === 0 ? (
-                <option>No devices connected</option>
-              ) : (
-                devices.map((device) => (
-                  <option key={device.id} value={device.id}>
-                    {device.model} ({device.id})
                   </option>
                 ))
               )}

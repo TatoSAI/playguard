@@ -14,6 +14,7 @@ export interface Device {
 export interface DeviceInfo {
   id: string
   model: string
+  marketName: string // friendly display name, e.g. "POCO X3 Pro" (may equal model if not available)
   manufacturer: string
   androidVersion: string
   resolution: string
@@ -111,6 +112,7 @@ export class ADBManager extends EventEmitter {
           deviceInfos.push({
             id: device.id,
             model: 'Unknown',
+            marketName: 'Unknown',
             manufacturer: 'Unknown',
             androidVersion: 'Unknown',
             resolution: 'Unknown',
@@ -135,7 +137,13 @@ export class ADBManager extends EventEmitter {
       const manufacturer = await this.getProperty(deviceId, 'ro.product.manufacturer')
       const androidVersion = await this.getProperty(deviceId, 'ro.build.version.release')
 
-      console.log(`[ADBManager] Device info: ${manufacturer} ${model}, Android ${androidVersion}`)
+      // Friendly display name: try market name props, fall back to technical model
+      const rawMarketName =
+        (await this.getProperty(deviceId, 'ro.product.marketname').catch(() => '')) ||
+        (await this.getProperty(deviceId, 'ro.vendor.product.marketname').catch(() => ''))
+      const marketName = rawMarketName.trim() || model
+
+      console.log(`[ADBManager] Device info: ${manufacturer} ${marketName} (${model}), Android ${androidVersion}`)
 
       // Get screen resolution
       const resolution = await this.getDeviceResolution(deviceId)
@@ -143,6 +151,7 @@ export class ADBManager extends EventEmitter {
       const deviceInfo: DeviceInfo = {
         id: deviceId,
         model,
+        marketName,
         manufacturer,
         androidVersion,
         resolution,

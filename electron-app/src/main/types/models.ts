@@ -15,6 +15,7 @@ export interface TestSuite {
   description?: string
   environment: SuiteEnvironment
   targetPlatform: TargetPlatform // Target platform for all tests in this suite
+  gameLinkId?: string // Associated GameLink ID (only for Web suites)
   tags: string[] // Tag IDs
   testCaseIds: string[] // Ordered list of test case IDs
   createdAt: string // ISO timestamp
@@ -23,10 +24,23 @@ export interface TestSuite {
 }
 
 // ============================================================================
+// Game Link Models
+// ============================================================================
+
+export interface GameLink {
+  id: string // Format: game_UUID
+  name: string // Display name (e.g., "My Game")
+  devUrl: string // Development environment URL
+  stagingUrl: string // Staging environment URL
+  productionUrl: string // Production environment URL
+  createdAt: string // ISO timestamp
+}
+
+// ============================================================================
 // Test Case Models
 // ============================================================================
 
-export type RecordingMode = 'coordinate' | 'element'
+export type RecordingMode = 'coordinate' | 'element' | 'html5'
 
 export interface TestCase {
   id: string // Format: test_001, test_002, etc.
@@ -39,6 +53,7 @@ export interface TestCase {
   recordingDevice: DeviceMetadata // Device used for recording
   recordingMode: RecordingMode // How test was recorded (coordinate or element-based)
   sdkVersion?: string // Unity SDK version if recorded with SDK
+  gameSDKType?: 'unity' | 'html5' // SDK type used during recording
 
   // Prerequisites
   prerequisites?: Prerequisite[]
@@ -69,13 +84,18 @@ export interface DeviceMetadata {
 export type AssertType =
   | 'element_exists' // SDK: Check if element exists by path
   | 'element_active' // SDK: Check if element is active/interactable
+  | 'element_visible' // Web: Check if element is visible in viewport
+  | 'element_not_visible' // Web: Check if element is not visible
   | 'text_equals' // SDK: Check if element text equals expected
   | 'text_contains' // SDK: Check if element text contains expected
   | 'screenshot_match' // No SDK: Visual comparison with reference screenshot
+  | 'url_contains' // Web: Check if current URL contains value
+  | 'url_equals' // Web: Check if current URL equals value
+  | 'value_equals' // Web: Check if input/element value equals expected
 
 export interface AssertionConfig {
   type: AssertType
-  target?: {
+  target?: string | {
     elementPath?: string // For SDK assertions
     elementName?: string // For SDK assertions
     x?: number // For coordinate-based fallback
@@ -84,6 +104,7 @@ export interface AssertionConfig {
   expected?: any // Expected value (text, boolean, etc.)
   threshold?: number // For screenshot_match: similarity threshold (0-1), default 0.95
   timeout?: number // Max time to wait for assertion to pass (ms)
+  data?: any // Extra data (e.g. { selector: 'css string' } for web assertions)
 }
 
 export type DeviceActionType =
@@ -113,15 +134,26 @@ export type DeviceActionType =
   | 'simulate_low_battery'
   | 'simulate_memory_warning'
 
+export type WebActionType =
+  | 'navigate' // Web: navigate to URL
+  | 'click' // Web: click an element
+  | 'type' // Web: type text into an element
+  | 'scroll' // Web: scroll the page or an element
+  | 'wait_for_element' // Web: wait until element is present/visible
+  | 'execute_js' // Web: execute arbitrary JavaScript
+  | 'sdk_property' // HTML5 SDK: get a custom property value
+  | 'sdk_action' // HTML5 SDK: execute a custom action
+  | 'sdk_command' // HTML5 SDK: execute a custom command
+
 export interface TestStep {
   id: string
-  type: 'tap' | 'swipe' | 'input' | 'wait' | 'assert' | 'screenshot' | DeviceActionType
+  type: 'tap' | 'swipe' | 'input' | 'wait' | 'assert' | 'screenshot' | DeviceActionType | WebActionType
   description: string // AI-fillable
 
   // Target specification (for tap, swipe, input, assert)
   target?: {
-    method?: 'gameObject' | 'coordinate'
-    value?: string // GameObject name or coordinate
+    method?: 'gameObject' | 'coordinate' | 'html5Element' | 'cssSelector'
+    value?: string // GameObject name, CSS selector, or coordinate
     fallback?: {
       x: number
       y: number
@@ -294,7 +326,7 @@ export interface RecordingSession {
     resolution: string
     model: string
   }
-  mode: 'coordinate' | 'element'
+  mode: 'coordinate' | 'element' | 'html5'
   sdkConnected: boolean
 }
 

@@ -3,13 +3,13 @@
  * Provides pre-built YAML templates for common test scenarios
  */
 
-import { FileText, ChevronRight } from 'lucide-react'
+import { FileText, ChevronRight, Globe, Smartphone } from 'lucide-react'
 
 export interface TestTemplate {
   id: string
   name: string
   description: string
-  category: 'basic' | 'game' | 'ui' | 'advanced'
+  category: 'basic' | 'game' | 'ui' | 'advanced' | 'web'
   template: string
 }
 
@@ -422,22 +422,265 @@ export const TEMPLATES: TestTemplate[] = [
       screenshot: true
       expectedResult: "Inventory UI matches reference"
 `
+  },
+
+  // ── Web HTML5 templates ─────────────────────────────────────────────────────
+
+  {
+    id: 'web_basic_click',
+    name: 'Basic Web Click',
+    description: 'Navigate to URL and click a button with CSS selector',
+    category: 'web',
+    template: `testCase:
+  name: "Basic Web Click"
+  description: "Navigate to game and click the start button"
+  platform: web
+  tags: [web, smoke, basic]
+  suite: "Default"
+
+  steps:
+    - id: step_1
+      action: navigate
+      url: "https://game.example.com"
+      description: "Open game page"
+      expectedResult: "Page loads"
+
+    - id: step_2
+      action: wait_for_element
+      target:
+        selector: ".game-container"
+      timeout: 10000
+      description: "Wait for game container"
+      expectedResult: "Game container visible"
+
+    - id: step_3
+      action: click
+      target:
+        selector: "#start-button"
+        fallback: {x: 540, y: 400}
+      description: "Click start button"
+      validation:
+        type: element_visible
+        selector: ".game-screen"
+        timeout: 3000
+      expectedResult: "Game starts"
+
+    - id: step_4
+      action: wait
+      duration: 2000
+      description: "Wait for game to initialize"
+      expectedResult: "Game is running"
+`
+  },
+  {
+    id: 'web_game_flow',
+    name: 'Web Game Flow',
+    description: 'Full web game session: load, play, pause, resume',
+    category: 'web',
+    template: `testCase:
+  name: "Web Game Flow"
+  description: "Verify complete game session from load to game over"
+  platform: web
+  tags: [web, game, critical]
+  suite: "Default"
+
+  steps:
+    - id: step_1
+      action: navigate
+      url: "https://game.example.com"
+      description: "Open game"
+      expectedResult: "Game page loads"
+
+    - id: step_2
+      action: wait_for_element
+      target:
+        selector: "#main-menu"
+      timeout: 10000
+      description: "Wait for main menu"
+      expectedResult: "Main menu visible"
+
+    - id: step_3
+      action: click
+      target:
+        selector: "#play-btn"
+      description: "Start game"
+      validation:
+        type: element_visible
+        selector: "#game-canvas"
+        timeout: 5000
+      expectedResult: "Game canvas appears"
+
+    - id: step_4
+      action: wait
+      duration: 3000
+      description: "Let game run briefly"
+      expectedResult: "Game is in progress"
+
+    - id: step_5
+      action: click
+      target:
+        selector: "#pause-btn"
+      description: "Pause game"
+      validation:
+        type: element_visible
+        selector: "#pause-menu"
+        timeout: 2000
+      expectedResult: "Pause menu appears"
+
+    - id: step_6
+      action: click
+      target:
+        selector: "#resume-btn"
+      description: "Resume game"
+      validation:
+        type: element_not_visible
+        selector: "#pause-menu"
+        timeout: 2000
+      expectedResult: "Game resumes"
+`
+  },
+  {
+    id: 'web_runstudio_sdk',
+    name: 'RUN.studio SDK Test',
+    description: 'Read game properties and execute SDK actions via HTML5 bridge',
+    category: 'web',
+    template: `testCase:
+  name: "RUN.studio SDK Test"
+  description: "Verify game state using PlayGuard HTML5 SDK"
+  platform: web
+  tags: [web, sdk, runstudio]
+  suite: "Default"
+
+  steps:
+    - id: step_1
+      action: navigate
+      url: "https://game.example.com"
+      description: "Open game with SDK"
+      expectedResult: "Game loads and SDK connects"
+
+    - id: step_2
+      action: wait_for_element
+      target:
+        selector: ".game-ready"
+      timeout: 15000
+      description: "Wait for SDK ready signal"
+      expectedResult: "SDK is connected"
+
+    - id: step_3
+      action: sdk_property
+      name: "playerCoins"
+      description: "Read initial coin count"
+      validation:
+        type: value_equals
+        expected: "0"
+      expectedResult: "Player starts with 0 coins"
+
+    - id: step_4
+      action: sdk_action
+      name: "addCoins"
+      args: ["100"]
+      description: "Give player 100 coins via SDK"
+      expectedResult: "Coins added"
+
+    - id: step_5
+      action: sdk_property
+      name: "playerCoins"
+      description: "Verify coins were added"
+      validation:
+        type: value_equals
+        expected: "100"
+      expectedResult: "Player now has 100 coins"
+
+    - id: step_6
+      action: sdk_action
+      name: "startLevel"
+      args: ["1"]
+      description: "Start level 1"
+      expectedResult: "Level 1 begins"
+`
+  },
+  {
+    id: 'web_form_input',
+    name: 'Web Form / Login',
+    description: 'Fill a web form using CSS selectors and assert result',
+    category: 'web',
+    template: `testCase:
+  name: "Web Login Form"
+  description: "Verify user can log in via web form"
+  platform: web
+  tags: [web, auth, smoke]
+  suite: "Default"
+
+  steps:
+    - id: step_1
+      action: navigate
+      url: "https://game.example.com/login"
+      description: "Open login page"
+      expectedResult: "Login page visible"
+
+    - id: step_2
+      action: wait_for_element
+      target:
+        selector: "form#login-form"
+      timeout: 5000
+      description: "Wait for login form"
+      expectedResult: "Form is ready"
+
+    - id: step_3
+      action: type
+      target:
+        selector: "input#username"
+      value: "testuser"
+      description: "Enter username"
+      expectedResult: "Username entered"
+
+    - id: step_4
+      action: type
+      target:
+        selector: "input#password"
+      value: "testpass123"
+      description: "Enter password"
+      expectedResult: "Password entered"
+
+    - id: step_5
+      action: click
+      target:
+        selector: "button[type='submit']"
+      description: "Submit login form"
+      validation:
+        type: url_contains
+        expected: "/dashboard"
+        timeout: 5000
+      expectedResult: "Redirected to dashboard"
+
+    - id: step_6
+      action: execute_js
+      script: "return document.querySelector('.user-name')?.textContent"
+      description: "Verify logged-in user name via JS"
+      expectedResult: "Username displayed in header"
+`
   }
 ]
 
 interface Props {
   onSelectTemplate: (template: string) => void
   onClose: () => void
+  platform?: 'android' | 'web'
 }
 
-export function TemplateLibrary({ onSelectTemplate, onClose }: Props) {
-  const categories = {
-    basic: 'Basic Tests',
-    game: 'Game Testing',
-    ui: 'UI Testing',
-    advanced: 'Advanced'
-  }
+const CATEGORY_META: Record<string, { label: string; icon: 'android' | 'web' | null }> = {
+  basic:    { label: 'Basic Tests',   icon: 'android' },
+  game:     { label: 'Game Testing',  icon: 'android' },
+  ui:       { label: 'UI Testing',    icon: 'android' },
+  advanced: { label: 'Advanced',      icon: 'android' },
+  web:      { label: 'Web HTML5',     icon: 'web'     }
+}
 
+// Show web categories first when platform is web
+const CATEGORY_ORDER_ANDROID = ['basic', 'game', 'ui', 'advanced', 'web']
+const CATEGORY_ORDER_WEB     = ['web', 'basic', 'game', 'ui', 'advanced']
+
+export function TemplateLibrary({ onSelectTemplate, onClose, platform = 'android' }: Props) {
   const groupedTemplates = TEMPLATES.reduce(
     (acc, template) => {
       if (!acc[template.category]) acc[template.category] = []
@@ -446,6 +689,8 @@ export function TemplateLibrary({ onSelectTemplate, onClose }: Props) {
     },
     {} as Record<string, TestTemplate[]>
   )
+
+  const categoryOrder = platform === 'web' ? CATEGORY_ORDER_WEB : CATEGORY_ORDER_ANDROID
 
   const handleSelectTemplate = (template: TestTemplate) => {
     onSelectTemplate(template.template)
@@ -460,23 +705,17 @@ export function TemplateLibrary({ onSelectTemplate, onClose }: Props) {
           <div className="flex items-center gap-2">
             <FileText className="w-5 h-5 text-primary" />
             <h2 className="text-lg font-semibold text-foreground">Template Library</h2>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+              platform === 'web'
+                ? 'bg-blue-500/15 text-blue-400'
+                : 'bg-muted text-muted-foreground'
+            }`}>
+              {platform === 'web' ? 'Web HTML5' : 'Android'}
+            </span>
           </div>
-          <button
-            onClick={onClose}
-            className="text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <svg
-              className="w-5 h-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M6 18L18 6M6 6l12 12"
-              />
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
         </div>
@@ -484,24 +723,42 @@ export function TemplateLibrary({ onSelectTemplate, onClose }: Props) {
         {/* Content */}
         <div className="flex-1 overflow-auto p-6">
           <p className="text-sm text-muted-foreground mb-6">
-            Choose a template to get started quickly with common test scenarios.
+            Choose a template to get started quickly. Templates matching your platform are shown first.
           </p>
 
-          {Object.entries(categories).map(([category, categoryName]) => {
+          {categoryOrder.map((category) => {
             const templates = groupedTemplates[category]
             if (!templates) return null
+            const meta = CATEGORY_META[category]
+            const isCurrentPlatform =
+              (platform === 'web' && category === 'web') ||
+              (platform === 'android' && category !== 'web')
 
             return (
               <div key={category} className="mb-6">
-                <h3 className="text-sm font-semibold text-foreground mb-3 uppercase tracking-wide">
-                  {categoryName}
-                </h3>
+                <div className="flex items-center gap-2 mb-3">
+                  {meta.icon === 'web'
+                    ? <Globe className="w-3.5 h-3.5 text-blue-400" />
+                    : <Smartphone className="w-3.5 h-3.5 text-muted-foreground" />}
+                  <h3 className={`text-xs font-semibold uppercase tracking-wide ${
+                    isCurrentPlatform ? 'text-foreground' : 'text-muted-foreground'
+                  }`}>
+                    {meta.label}
+                  </h3>
+                  {isCurrentPlatform && (
+                    <span className="text-[9px] px-1 py-0.5 rounded bg-primary/10 text-primary font-medium">Recommended</span>
+                  )}
+                </div>
                 <div className="space-y-2">
                   {templates.map((template) => (
                     <button
                       key={template.id}
                       onClick={() => handleSelectTemplate(template)}
-                      className="w-full flex items-center justify-between p-4 border border-border rounded-lg hover:border-primary hover:bg-primary/5 transition-colors text-left group"
+                      className={`w-full flex items-center justify-between p-4 border rounded-lg transition-colors text-left group ${
+                        isCurrentPlatform
+                          ? 'border-border hover:border-primary hover:bg-primary/5'
+                          : 'border-border/50 hover:border-border hover:bg-muted/30 opacity-70 hover:opacity-100'
+                      }`}
                     >
                       <div className="flex-1">
                         <h4 className="text-sm font-medium text-foreground mb-1">

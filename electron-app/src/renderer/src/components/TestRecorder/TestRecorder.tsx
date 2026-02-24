@@ -18,7 +18,8 @@ import {
   Image,
   Maximize2,
   X,
-  Download
+  Download,
+  Globe
 } from 'lucide-react'
 import DeviceActionsPanel from './DeviceActionsPanel'
 import CustomPropertyViewer from '../CustomPropertyViewer'
@@ -45,7 +46,7 @@ interface RecordingSession {
   startTime: number
   actions: RecordedAction[]
   deviceId: string
-  mode?: 'coordinate' | 'element'
+  mode?: 'coordinate' | 'element' | 'html5'
   sdkConnected?: boolean
 }
 
@@ -68,6 +69,8 @@ export default function TestRecorder(): JSX.Element {
 
   // Suite selection
   const [selectedSuiteId, setSelectedSuiteId] = useState<string>('')
+  const [suites, setSuites] = useState<any[]>([])
+  const [gameLinks, setGameLinks] = useState<any[]>([])
 
   useEffect(() => {
     loadDevices()
@@ -91,10 +94,36 @@ export default function TestRecorder(): JSX.Element {
 
   const loadDevices = async (): Promise<void> => {
     try {
-      const deviceList = await window.api.adb.getDevices()
-      setDevices(deviceList)
-      if (deviceList.length > 0 && !selectedDevice) {
-        setSelectedDevice(deviceList[0].id)
+      const [adbList, detectedTypes, links, suiteResult] = await Promise.all([
+        window.api.adb.getDevices().catch(() => []),
+        window.api.browserDevice.detectBrowsers().catch(() => [] as string[]),
+        window.api.gameLink.getAll().catch(() => []),
+        window.api.suite.list().catch(() => ({ suites: [] }))
+      ])
+
+      // Virtual browser entries — built-in Chromium always, plus any detected external browsers
+      const BROWSER_LABELS: Record<string, string> = {
+        chromium: 'Chromium (Built-in)',
+        chrome: 'Google Chrome',
+        edge: 'Microsoft Edge',
+        firefox: 'Mozilla Firefox'
+      }
+      const allBrowserTypes = ['chromium', ...(detectedTypes as string[]).filter((t) => t !== 'chromium')]
+      const browserAsDevices = allBrowserTypes.map((t) => ({
+        id: `browser_${t}`,
+        model: BROWSER_LABELS[t] ?? t,
+        manufacturer: 'Browser',
+        androidVersion: '',
+        resolution: 'browser',
+        isConnected: true,
+        type: 'browser'
+      }))
+      const all = [...adbList, ...browserAsDevices]
+      setDevices(all)
+      setGameLinks(links)
+      setSuites(suiteResult.suites || [])
+      if (all.length > 0 && !selectedDevice) {
+        setSelectedDevice(all[0].id)
       }
     } catch (error) {
       console.error('Failed to load devices:', error)
@@ -110,6 +139,13 @@ export default function TestRecorder(): JSX.Element {
         hasSession: !!result.session,
         actionsCount: result.session?.actions?.length || 0
       })
+
+      // Backend stopped recording (browser was closed by user) — sync frontend state
+      if (result.success && !result.isRecording && session?.isRecording) {
+        setSession({ ...session, isRecording: false })
+        toast.info('Recording stopped: browser was closed')
+        return
+      }
 
       if (result.success && result.session) {
         // Update session with backend state
@@ -142,6 +178,11 @@ export default function TestRecorder(): JSX.Element {
             }
           } else if (action.type === 'swipe') {
             description = `Swipe from (${action.data.x1}, ${action.data.y1}) to (${action.data.x2}, ${action.data.y2})`
+          } else if (action.type === 'key') {
+            description = `Key: ${action.data.key}`
+          } else if (action.type === 'scroll') {
+            const dir = action.data.deltaY > 0 ? 'down' : action.data.deltaY < 0 ? 'up' : 'horizontal'
+            description = `Scroll ${dir}`
           } else if (action.type === 'screenshot') {
             description = action.data.description || 'Screenshot'
           } else {
@@ -644,6 +685,7 @@ export default function TestRecorder(): JSX.Element {
             onTestTagsChange={setTestTags}
             onSelectedSuiteIdChange={setSelectedSuiteId}
             showAIAssist={false}
+            filterPlatform={selectedDevice.startsWith('browser_') ? 'Web' : selectedDevice ? 'Android' : undefined}
           />
 
           {/* Target Device */}
@@ -658,13 +700,13 @@ export default function TestRecorder(): JSX.Element {
               required
             >
               {devices.length === 0 ? (
-                <option value="">No devices connected</option>
+                <option value="">No devices — connect via USB or add a browser device</option>
               ) : (
                 <>
                   <option value="">Select a device...</option>
                   {devices.map((device) => (
                     <option key={device.id} value={device.id}>
-                      {device.model} ({device.id})
+                      {device.type === 'browser' ? '🌐' : '📱'} {device.model}{device.type !== 'browser' ? ` (${device.id})` : ''}
                     </option>
                   ))}
                 </>
@@ -672,10 +714,37 @@ export default function TestRecorder(): JSX.Element {
             </select>
             {devices.length === 0 && (
               <p className="text-xs text-muted-foreground mt-1">
-                No devices found. Connect a device via ADB.
+                No devices found. Connect via USB or add a browser device in the Devices tab.
               </p>
             )}
           </div>
+
+          {/* Environment badge — shown when a browser device + Web suite is selected */}
+          {selectedDevice.startsWith('browser_') && selectedSuiteId && (() => {
+            const suite = suites.find((s: any) => s.id === selectedSuiteId)
+            if (!suite) return null
+            const envColors: Record<string, string> = {
+              Development: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30',
+              Staging: 'bg-orange-500/15 text-orange-400 border-orange-500/30',
+              Production: 'bg-green-500/15 text-green-400 border-green-500/30',
+              Other: 'bg-gray-500/15 text-gray-400 border-gray-500/30'
+            }
+            const colorClass = envColors[suite.environment] ?? envColors.Other
+            const gameLink = gameLinks.find((g: any) => g.id === suite.gameLinkId)
+            const resolvedUrl = resolveWebviewUrl(suites, gameLinks, selectedSuiteId, selectedDevice, devices)
+            return (
+              <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm ${colorClass}`}>
+                <span className="w-2 h-2 rounded-full bg-current shrink-0" />
+                <span className="font-medium">{suite.environment}</span>
+                {gameLink && resolvedUrl && (
+                  <span className="text-xs opacity-70 font-mono truncate ml-auto max-w-[180px]">{resolvedUrl}</span>
+                )}
+                {!gameLink && (
+                  <span className="text-xs opacity-70 ml-auto">No game link</span>
+                )}
+              </div>
+            )
+          })()}
 
           {/* Start Button */}
           <button
@@ -716,22 +785,36 @@ export default function TestRecorder(): JSX.Element {
             <div className="mb-3">
               <div
                 title={
-                  session.sdkConnected
-                    ? 'Element Mode: SDK Connected - Recording element-based actions'
-                    : 'Coordinate Mode: SDK Not Detected - Recording coordinate-based actions'
+                  session.mode === 'element'
+                    ? 'Unity SDK: Element-based recording (Unity Canvas paths)'
+                    : session.mode === 'html5'
+                    ? 'RUN.game SDK: HTML5 element-based recording'
+                    : 'ADB Only: Coordinate-based recording (no SDK detected)'
                 }
                 className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium cursor-help ${
-                  session.sdkConnected
+                  session.mode === 'element'
                     ? 'bg-green-500/10 text-green-500 border border-green-500/20'
+                    : session.mode === 'html5'
+                    ? 'bg-blue-500/10 text-blue-500 border border-blue-500/20'
                     : 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20'
                 }`}
               >
                 <div
                   className={`w-1.5 h-1.5 rounded-full ${
-                    session.sdkConnected ? 'bg-green-500' : 'bg-yellow-500'
+                    session.mode === 'element'
+                      ? 'bg-green-500'
+                      : session.mode === 'html5'
+                      ? 'bg-blue-500'
+                      : 'bg-yellow-500'
                   }`}
                 />
-                {session.sdkConnected ? <span>SDK</span> : <span>ADB</span>}
+                {session.mode === 'element' ? (
+                  <span>Unity SDK</span>
+                ) : session.mode === 'html5' ? (
+                  <span>RUN.game SDK</span>
+                ) : (
+                  <span>ADB Only</span>
+                )}
               </div>
             </div>
 
@@ -841,56 +924,63 @@ export default function TestRecorder(): JSX.Element {
       )}
 
       {/* Center Area - Device Preview */}
-      <div className="flex-1 flex items-center justify-center p-8 bg-muted/20">
+      <div className={`flex-1 flex bg-muted/20 min-h-0 overflow-hidden ${session && selectedDevice.startsWith('browser_') ? '' : 'items-center justify-center p-8'}`}>
         {session ? (
-          <div className="w-full max-w-md">
-            <div className="flex items-center gap-2 mb-4">
-              <Smartphone className="w-4 h-4 text-muted-foreground" />
-              <h3 className="text-sm font-medium text-foreground">Device Preview</h3>
-              {isViewingPreviousCapture ? (
-                <span className="text-xs px-2 py-0.5 rounded-md bg-orange-500/10 text-orange-500 border border-orange-500/20">
-                  📸 Viewing Previous Capture
-                </span>
-              ) : (
-                <span className="text-xs px-2 py-0.5 rounded-md bg-muted text-muted-foreground">
-                  Click to tap
-                </span>
-              )}
-            </div>
-            <div className="relative aspect-[9/16] bg-card rounded-lg border-2 border-border flex items-center justify-center shadow-xl overflow-hidden">
-              {screenshot ? (
-                <>
-                  <img
-                    ref={imageRef}
-                    src={screenshot}
-                    alt="Device screen"
-                    className="w-full h-full object-contain cursor-crosshair"
-                    onClick={handleScreenshotClick}
-                  />
-                  {tapCoords && (
-                    <div
-                      className="absolute w-12 h-12 rounded-full border-4 border-red-500 animate-ping pointer-events-none"
-                      style={{
-                        left: `${(tapCoords.x / 1080) * 100}%`,
-                        top: `${(tapCoords.y / 2400) * 100}%`,
-                        transform: 'translate(-50%, -50%)'
-                      }}
+          selectedDevice.startsWith('browser_') ? (
+            <InlineWebviewPanel
+              url={resolveWebviewUrl(suites, gameLinks, selectedSuiteId, selectedDevice, devices)}
+              isRecording={session.isRecording}
+            />
+          ) : (
+            <div className="w-full max-w-md">
+              <div className="flex items-center gap-2 mb-4">
+                <Smartphone className="w-4 h-4 text-muted-foreground" />
+                <h3 className="text-sm font-medium text-foreground">Device Preview</h3>
+                {isViewingPreviousCapture ? (
+                  <span className="text-xs px-2 py-0.5 rounded-md bg-orange-500/10 text-orange-500 border border-orange-500/20">
+                    📸 Viewing Previous Capture
+                  </span>
+                ) : (
+                  <span className="text-xs px-2 py-0.5 rounded-md bg-muted text-muted-foreground">
+                    Click to tap
+                  </span>
+                )}
+              </div>
+              <div className="relative aspect-[9/16] bg-card rounded-lg border-2 border-border flex items-center justify-center shadow-xl overflow-hidden">
+                {screenshot ? (
+                  <>
+                    <img
+                      ref={imageRef}
+                      src={screenshot}
+                      alt="Device screen"
+                      className="w-full h-full object-contain cursor-crosshair"
+                      onClick={handleScreenshotClick}
                     />
-                  )}
-                </>
-              ) : (
-                <div className="text-center p-8">
-                  <div className="w-12 h-12 rounded-lg bg-muted flex items-center justify-center mx-auto mb-3">
-                    <Smartphone className="w-6 h-6 text-muted-foreground animate-pulse" />
+                    {tapCoords && (
+                      <div
+                        className="absolute w-12 h-12 rounded-full border-4 border-red-500 animate-ping pointer-events-none"
+                        style={{
+                          left: `${(tapCoords.x / 1080) * 100}%`,
+                          top: `${(tapCoords.y / 2400) * 100}%`,
+                          transform: 'translate(-50%, -50%)'
+                        }}
+                      />
+                    )}
+                  </>
+                ) : (
+                  <div className="text-center p-8">
+                    <div className="w-12 h-12 rounded-lg bg-muted flex items-center justify-center mx-auto mb-3">
+                      <Smartphone className="w-6 h-6 text-muted-foreground animate-pulse" />
+                    </div>
+                    <p className="text-sm font-medium text-foreground mb-1">Waiting for screen</p>
+                    <p className="text-xs text-muted-foreground">
+                      Click on your device to capture
+                    </p>
                   </div>
-                  <p className="text-sm font-medium text-foreground mb-1">Waiting for screen</p>
-                  <p className="text-xs text-muted-foreground">
-                    Click on your device to capture
-                  </p>
-                </div>
-              )}
+                )}
+              </div>
             </div>
-          </div>
+          )
         ) : (
           <div className="text-center max-w-sm">
             <div className="w-16 h-16 rounded-xl bg-gradient-to-br from-red-500/10 to-red-600/5 flex items-center justify-center mx-auto mb-4">
@@ -904,8 +994,8 @@ export default function TestRecorder(): JSX.Element {
         )}
       </div>
 
-      {/* Right Sidebar - Device Actions Panel */}
-      {session && session.isRecording && (
+      {/* Right Sidebar - Device Actions Panel (Android only) */}
+      {session && session.isRecording && !selectedDevice.startsWith('browser_') && (
         <div className="w-80 border-l border-border bg-card flex flex-col">
           <div className="p-4 border-b border-border">
             <h3 className="font-semibold text-sm flex items-center gap-2 mb-1">
@@ -919,11 +1009,11 @@ export default function TestRecorder(): JSX.Element {
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
             <DeviceActionsPanel onActionAdd={addDeviceAction} />
 
-            {/* Custom Property Viewer (SDK v2.0) */}
+            {/* Custom Property Viewer (Unity SDK v2.0 or RUN.game HTML5 SDK) */}
             <CustomPropertyViewer
               isSDKConnected={session?.sdkConnected || false}
+              sdkType={session?.mode === 'html5' ? 'html5' : 'unity'}
               onRefresh={() => {
-                // Optionally refresh screenshot or other data
                 console.log('[TestRecorder] Custom property viewer refreshed')
               }}
             />
@@ -1130,6 +1220,10 @@ function getActionIcon(type: string): string {
       return '👉'
     case 'input':
       return '⌨️'
+    case 'key':
+      return '⌨️'
+    case 'scroll':
+      return '↕️'
     case 'wait':
       return '⏱️'
     case 'assert':
@@ -1243,4 +1337,115 @@ function formatDuration(ms: number): string {
     return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`
   }
   return `0:${remainingSeconds.toString().padStart(2, '0')}`
+}
+
+// ─── Inline Webview Panel ────────────────────────────────────────────────────
+// The game runs inside the PlayGuard window via an Electron <webview> tag.
+// ─── URL resolution ───────────────────────────────────────────────────────────
+// Resolves the game URL for the webview based on suite's gameLinkId + environment.
+// Falls back to device.url for legacy browser devices that still have a URL.
+function resolveWebviewUrl(suites: any[], gameLinks: any[], selectedSuiteId: string, selectedDevice: string, devices: any[]): string {
+  if (!selectedDevice.startsWith('browser_')) return ''
+  const suite = suites.find((s) => s.id === selectedSuiteId)
+  if (suite?.gameLinkId) {
+    const gl = gameLinks.find((g) => g.id === suite.gameLinkId)
+    if (gl) {
+      switch (suite.environment) {
+        case 'Development': return gl.devUrl || ''
+        case 'Staging': return gl.stagingUrl || ''
+        case 'Production': return gl.productionUrl || ''
+        default: return gl.devUrl || gl.stagingUrl || gl.productionUrl || ''
+      }
+    }
+  }
+  // Fallback: legacy device URL
+  return devices.find((d) => d.id === selectedDevice)?.url || ''
+}
+
+// ─── Inline webview ────────────────────────────────────────────────────────────
+// Events are captured via WebFrameMain injection from the main process.
+// This is the only approach that:
+//   1. Works inside cross-origin game iframes (WebFrameMain can reach any frame)
+//   2. Does NOT intercept events — the game receives real trusted user gestures,
+//      so audio unlock / loading screens / click-to-start all work correctly.
+//
+// Flow:
+//   • attachBrowserCapture(wcId) → main injects TOP_FRAME_INJECT + FRAME_INJECT
+//     into every existing frame and listens for new frames via 'frame-created'
+//   • Sub-frames postMessage { __pg, x, y } to window.top
+//   • Top frame adjusts coords by iframe.getBoundingClientRect() offset
+//   • All events land in window.__pgQueue (top frame)
+//   • Renderer polls __pgQueue every 150ms while recording
+
+function InlineWebviewPanel({ url, isRecording }: { url: string; isRecording: boolean }): JSX.Element {
+  const webviewRef = useRef<any>(null)
+  const attachedWcIdRef = useRef<number | null>(null)
+
+  // On dom-ready: attach frame capture. On unmount: detach.
+  useEffect(() => {
+    const wv = webviewRef.current
+    if (!wv) return
+
+    const onReady = async () => {
+      const wcId: number = wv.getWebContentsId()
+      if (wcId > 0 && wcId !== attachedWcIdRef.current) {
+        attachedWcIdRef.current = wcId
+        await window.api.recorder.attachBrowserCapture(wcId).catch(() => {})
+      }
+    }
+
+    // Redirect new-window / target="_blank" back into the webview.
+    // Many game platforms open the actual game in a popup — without this the webview goes black.
+    const handleNewWindow = (e: any) => {
+      try { wv.loadURL(e.url) } catch { /* ignore */ }
+    }
+
+    wv.addEventListener('dom-ready', onReady)
+    wv.addEventListener('new-window', handleNewWindow)
+
+    return () => {
+      wv.removeEventListener('dom-ready', onReady)
+      wv.removeEventListener('new-window', handleNewWindow)
+      if (attachedWcIdRef.current) {
+        window.api.recorder.detachBrowserCapture(attachedWcIdRef.current).catch(() => {})
+        attachedWcIdRef.current = null
+      }
+    }
+  }, [])
+
+  // Poll window.__pgQueue while recording
+  useEffect(() => {
+    if (!isRecording) return
+    const poll = setInterval(async () => {
+      const wv = webviewRef.current
+      if (!wv) return
+      try {
+        const items: any[] = await wv.executeJavaScript(
+          'var q = window.__pgQueue || []; window.__pgQueue = []; q'
+        )
+        for (const item of items) {
+          if (item.__pg === 'tap') {
+            window.api.test.captureAction('tap', { x: item.x, y: item.y }).catch(() => {})
+          } else if (item.__pg === 'key') {
+            window.api.test.captureAction('key', { key: item.k, code: item.c }).catch(() => {})
+          } else if (item.__pg === 'scroll') {
+            window.api.test.captureAction('scroll', { deltaX: item.dx, deltaY: item.dy }).catch(() => {})
+          }
+        }
+      } catch { /* webview may be navigating */ }
+    }, 150)
+    return () => clearInterval(poll)
+  }, [isRecording])
+
+  return (
+    <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
+      <webview
+        ref={webviewRef}
+        src={url}
+        partition="persist:games"
+        allowpopups=""
+        style={{ flex: 1, width: '100%', minHeight: 0 }}
+      />
+    </div>
+  )
 }

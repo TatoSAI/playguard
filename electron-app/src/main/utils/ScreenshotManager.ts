@@ -12,32 +12,43 @@ import * as electron from 'electron'
  * - Easier to view/debug (can open PNG files directly)
  */
 export class ScreenshotManager {
-  private screenshotsDir: string
+  private screenshotsDir: string | null = null
 
   constructor() {
-    // Handle case when ELECTRON_RUN_AS_NODE is set (electron module not properly loaded)
-    try {
-      if (electron?.app?.getPath) {
-        this.screenshotsDir = path.join(
-          electron.app.getPath('userData'),
-          'test-data',
-          'screenshots'
-        )
-      } else {
-        // Fallback to relative path if electron is not available
-        console.warn('[ScreenshotManager] Electron app not available, using fallback path')
+    // Directory initialized lazily to avoid accessing app before it's ready
+  }
+
+  /**
+   * Get screenshots directory (lazy initialization)
+   */
+  private getScreenshotsDir(): string {
+    if (!this.screenshotsDir) {
+      // Handle case when ELECTRON_RUN_AS_NODE is set (electron module not properly loaded)
+      try {
+        if (electron?.app?.getPath) {
+          this.screenshotsDir = path.join(
+            electron.app.getPath('userData'),
+            'test-data',
+            'screenshots'
+          )
+        } else {
+          // Fallback to relative path if electron is not available
+          console.warn('[ScreenshotManager] Electron app not available, using fallback path')
+          this.screenshotsDir = path.join(process.cwd(), 'test-data', 'screenshots')
+        }
+      } catch (error) {
+        // Fallback to relative path if any error occurs
+        console.error('[ScreenshotManager] Error accessing electron.app:', error)
         this.screenshotsDir = path.join(process.cwd(), 'test-data', 'screenshots')
       }
-    } catch (error) {
-      // Fallback to relative path if any error occurs
-      console.error('[ScreenshotManager] Error accessing electron.app:', error)
-      this.screenshotsDir = path.join(process.cwd(), 'test-data', 'screenshots')
     }
+    return this.screenshotsDir
   }
 
   async initialize(): Promise<void> {
-    await fs.mkdir(this.screenshotsDir, { recursive: true })
-    console.log(`[ScreenshotManager] Initialized: ${this.screenshotsDir}`)
+    const screenshotsDir = this.getScreenshotsDir()
+    await fs.mkdir(screenshotsDir, { recursive: true })
+    console.log(`[ScreenshotManager] Initialized: ${screenshotsDir}`)
   }
 
   /**
@@ -58,7 +69,8 @@ export class ScreenshotManager {
     const base64Clean = base64Data.replace(/^data:image\/\w+;base64,/, '')
 
     // Create suite directory
-    const suiteDir = path.join(this.screenshotsDir, suiteId)
+    const screenshotsDir = this.getScreenshotsDir()
+    const suiteDir = path.join(screenshotsDir, suiteId)
     await fs.mkdir(suiteDir, { recursive: true })
 
     // Generate filename: testId_stepId.png
@@ -82,7 +94,7 @@ export class ScreenshotManager {
    * @returns Base64 data URI (data:image/png;base64,...)
    */
   async loadScreenshot(relativePath: string): Promise<string> {
-    const fullPath = path.join(this.screenshotsDir, relativePath)
+    const fullPath = path.join(this.getScreenshotsDir(), relativePath)
 
     try {
       const buffer = await fs.readFile(fullPath)
@@ -100,7 +112,7 @@ export class ScreenshotManager {
    * @param testId - Test case ID
    */
   async deleteTestScreenshots(suiteId: string, testId: string): Promise<void> {
-    const suiteDir = path.join(this.screenshotsDir, suiteId)
+    const suiteDir = path.join(this.getScreenshotsDir(), suiteId)
 
     try {
       const files = await fs.readdir(suiteDir)
@@ -120,7 +132,7 @@ export class ScreenshotManager {
    * @param suiteId - Test suite ID
    */
   async deleteSuiteScreenshots(suiteId: string): Promise<void> {
-    const suiteDir = path.join(this.screenshotsDir, suiteId)
+    const suiteDir = path.join(this.getScreenshotsDir(), suiteId)
 
     try {
       await fs.rm(suiteDir, { recursive: true, force: true })
@@ -136,7 +148,7 @@ export class ScreenshotManager {
    * @returns Size in bytes
    */
   async getScreenshotSize(relativePath: string): Promise<number> {
-    const fullPath = path.join(this.screenshotsDir, relativePath)
+    const fullPath = path.join(this.getScreenshotsDir(), relativePath)
 
     try {
       const stats = await fs.stat(fullPath)
@@ -152,7 +164,7 @@ export class ScreenshotManager {
    * @returns True if exists
    */
   async screenshotExists(relativePath: string): Promise<boolean> {
-    const fullPath = path.join(this.screenshotsDir, relativePath)
+    const fullPath = path.join(this.getScreenshotsDir(), relativePath)
 
     try {
       await fs.access(fullPath)
@@ -170,10 +182,10 @@ export class ScreenshotManager {
     let deletedCount = 0
 
     try {
-      const suites = await fs.readdir(this.screenshotsDir)
+      const suites = await fs.readdir(this.getScreenshotsDir())
 
       for (const suiteId of suites) {
-        const suiteDir = path.join(this.screenshotsDir, suiteId)
+        const suiteDir = path.join(this.getScreenshotsDir(), suiteId)
         const files = await fs.readdir(suiteDir)
 
         for (const file of files) {
@@ -204,10 +216,10 @@ export class ScreenshotManager {
     let totalSize = 0
 
     try {
-      const suites = await fs.readdir(this.screenshotsDir)
+      const suites = await fs.readdir(this.getScreenshotsDir())
 
       for (const suiteId of suites) {
-        const suiteDir = path.join(this.screenshotsDir, suiteId)
+        const suiteDir = path.join(this.getScreenshotsDir(), suiteId)
         const files = await fs.readdir(suiteDir)
 
         for (const file of files) {

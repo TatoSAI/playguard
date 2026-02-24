@@ -1,5 +1,7 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, session, webContents } from 'electron'
 import { join } from 'path'
+import { writeFileSync } from 'fs'
+import { tmpdir } from 'os'
 import icon from '../../resources/icon.png?asset'
 import { ADBManager } from './adb/ADBManager'
 import { TestRunner } from './test-engine/TestRunner'
@@ -19,6 +21,12 @@ import { getSettingsManager } from './managers/SettingsManager'
 import { getSecureStorage } from './managers/SecureStorage'
 import { reportManager } from './services/ReportManager'
 import { executionStateManager } from './services/ExecutionStateManager'
+import { AdHocMonitor } from './services/AdHocMonitor'
+import { HTML5Bridge } from './html5/HTML5Bridge'
+import { SyncAPIServer } from './services/SyncAPIServer'
+import { BrowserDeviceManager } from './services/BrowserDeviceManager'
+import { BrowserSessionManager } from './services/BrowserSessionManager'
+import { GameLinkManager } from './services/GameLinkManager'
 
 // Initialize managers
 let adbManager: ADBManager | null = null
@@ -34,6 +42,12 @@ let testScriptParser: TestScriptParser | null = null
 let testRunner: TestRunner | null = null
 let testRecorder: TestRecorder | null = null
 let dataMigration: DataMigration | null = null
+let adHocMonitor: AdHocMonitor | null = null
+let html5Bridge: HTML5Bridge | null = null
+let syncAPIServer: SyncAPIServer | null = null
+let browserDeviceManager: BrowserDeviceManager | null = null
+let browserSessionManager: BrowserSessionManager | null = null
+let gameLinkManager: GameLinkManager | null = null
 
 function createWindow(): void {
   // Create the browser window
@@ -49,7 +63,8 @@ function createWindow(): void {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
       nodeIntegration: false,
-      contextIsolation: true
+      contextIsolation: true,
+      webviewTag: true
     },
     titleBarStyle: 'default',
     backgroundColor: '#0f172a'
@@ -61,7 +76,7 @@ function createWindow(): void {
       responseHeaders: {
         ...details.responseHeaders,
         'Content-Security-Policy': [
-          "default-src 'self'; img-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'"
+          "default-src 'self'; img-src 'self' data: blob: http: https:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; child-src * blob: data:; connect-src 'self' ws: wss: http: https:; media-src * blob: data:; font-src * data:"
         ]
       }
     })
@@ -90,6 +105,80 @@ function createWindow(): void {
   }
 }
 
+// Preload script injected into every game webview before page scripts run.
+// Hides Electron/automation signals so game anti-cheat systems pass.
+const GAME_WEBVIEW_PRELOAD = `
+(function () {
+  // 1. Remove navigator.webdriver — the #1 automation detection signal
+  try {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined, configurable: true });
+  } catch (_) {}
+
+  // 2. Add window.chrome with real-browser APIs (Electron webview omits these)
+  if (!window.chrome) window.chrome = {};
+  if (!window.chrome.runtime) {
+    window.chrome.runtime = { id: undefined, connect: function(){return{};}, sendMessage: function(){} };
+  }
+  if (!window.chrome.app) {
+    window.chrome.app = { isInstalled: false };
+  }
+  if (!window.chrome.csi) {
+    window.chrome.csi = function() { return { startE: Date.now(), onloadT: Date.now(), pageT: 1, tpls: {} }; };
+  }
+  if (!window.chrome.loadTimes) {
+    window.chrome.loadTimes = function() { return { requestTime: Date.now() / 1000, startLoadTime: Date.now() / 1000, commitLoadTime: Date.now() / 1000, finishDocumentLoadTime: Date.now() / 1000, finishLoadTime: Date.now() / 1000, firstPaintTime: Date.now() / 1000, firstPaintAfterLoadTime: 0, navigationType: 'Other', wasFetchedViaSpdy: false, wasNpnNegotiated: false, npnNegotiatedProtocol: 'unknown', wasAlternateProtocolAvailable: false, connectionInfo: 'http/1.1' }; };
+  }
+
+  // 3. Spoof plugins list (empty list is an automation signal)
+  try {
+    Object.defineProperty(navigator, 'plugins', {
+      get: () => {
+        const p = { 0: { name: 'PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format', length: 1 }, length: 1, item: function(i) { return this[i]; }, namedItem: function(n) { for (var k in this) if (this[k] && this[k].name === n) return this[k]; return null; }, refresh: function(){} };
+        return p;
+      },
+      configurable: true
+    });
+  } catch (_) {}
+
+  // 4. Spoof languages
+  try {
+    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'], configurable: true });
+  } catch (_) {}
+})();
+`
+
+// Configure the 'persist:games' partition used by the inline game webview.
+// Uses a standard Chrome user agent (hides Electron) and removes restrictive CSP headers.
+function setupGameWebviewSession(): void {
+  const gameSession = session.fromPartition('persist:games')
+
+  // Spoof user agent to hide Electron — game platforms reject non-browser UAs
+  const chromeUA =
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+  gameSession.setUserAgent(chromeUA)
+
+  // Write anti-detection preload to a temp file and inject into all webviews on this partition.
+  // This runs BEFORE any page scripts, so integrity checks see a normal browser environment.
+  try {
+    const preloadPath = join(tmpdir(), 'playguard-game-webview-preload.js')
+    writeFileSync(preloadPath, GAME_WEBVIEW_PRELOAD)
+    gameSession.setPreloads([preloadPath])
+    console.log('[GameWebview] Anti-detection preload installed')
+  } catch (err) {
+    console.warn('[GameWebview] Could not install preload:', err)
+  }
+
+  gameSession.webRequest.onHeadersReceived((details, callback) => {
+    const headers = { ...details.responseHeaders }
+    // Remove restrictive CSP from game pages so scripts/workers can run.
+    // Do NOT inject COOP/COEP — those block cross-origin iframes (reCAPTCHA, Stripe)
+    // that game platforms use for integrity checks, causing ERR_BLOCKED_BY_RESPONSE.
+    delete headers['Content-Security-Policy']
+    delete headers['content-security-policy']
+    callback({ responseHeaders: headers })
+  })
+}
+
 // This method will be called when Electron has finished initialization
 app.whenReady().then(async () => {
   // Set app user model id for windows
@@ -97,12 +186,17 @@ app.whenReady().then(async () => {
     app.setAppUserModelId('com.playguard.app')
   }
 
+  setupGameWebviewSession()
+
   // Initialize managers in correct order
   const userDataPath = app.getPath('userData')
 
   // Core managers
   adbManager = new ADBManager()
   await adbManager.initialize()
+
+  // Initialize Ad-Hoc Monitor (requires ADB)
+  adHocMonitor = new AdHocMonitor(adbManager)
 
   // Initialize Device Setup Manager (requires ADB)
   deviceSetupManager = new DeviceSetupManager(adbManager)
@@ -145,9 +239,22 @@ app.whenReady().then(async () => {
   // Script parser
   testScriptParser = new TestScriptParser()
 
+  // Browser device manager (persists browser "devices" with URLs)
+  browserDeviceManager = new BrowserDeviceManager(userDataPath)
+  browserSessionManager = new BrowserSessionManager()
+  gameLinkManager = new GameLinkManager(userDataPath)
+
+  // HTML5 Bridge (WebSocket server for RUN.game HTML5 games)
+  html5Bridge = new HTML5Bridge(adbManager)
+  html5Bridge.startServer()
+
   // Test engine
-  testRunner = new TestRunner(adbManager, prerequisiteVerifier, testCaseManager, dependencyValidator)
-  testRecorder = new TestRecorder(adbManager)
+  testRunner = new TestRunner(adbManager, prerequisiteVerifier, testCaseManager, dependencyValidator, undefined, html5Bridge)
+  testRecorder = new TestRecorder(adbManager, html5Bridge, browserSessionManager, browserDeviceManager)
+
+  // RUN.studio sync API
+  syncAPIServer = new SyncAPIServer(testCaseManager, suiteManager)
+  syncAPIServer.start()
 
   // Check for data migration
   dataMigration = new DataMigration(userDataPath, suiteManager, testCaseManager)
@@ -173,6 +280,8 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     adbManager?.cleanup()
+    html5Bridge?.stopServer()
+    syncAPIServer?.stop()
     app.quit()
   }
 })
@@ -193,6 +302,13 @@ function setupIPCHandlers(): void {
   ipcMain.handle('adb:disconnect', async (_, deviceId: string) => {
     if (!adbManager) throw new Error('ADB Manager not initialized')
     return await adbManager.disconnectDevice(deviceId)
+  })
+
+  ipcMain.handle('adb:captureScreenshot', async (_, deviceId: string) => {
+    if (!adbManager) throw new Error('ADB Manager not initialized')
+    const screenshot = await adbManager.captureScreenshot(deviceId)
+    // Convert Buffer to base64 data URI
+    return `data:image/png;base64,${screenshot.toString('base64')}`
   })
 
   // Test Recording
@@ -269,6 +385,7 @@ function setupIPCHandlers(): void {
         success: true,
         isRecording: testRecorder.isCurrentlyRecording(),
         liveScreenshot, // Live streaming screenshot (not saved as action)
+        lastScreenshot: testRecorder.getLastBrowserScreenshot() ?? liveScreenshot,
         session: {
           ...session,
           actions: actionsWithBase64Screenshots
@@ -1650,6 +1767,271 @@ function setupIPCHandlers(): void {
     }
   })
 
+  // ===== HTML5 BRIDGE HANDLERS (RUN.game) =====
+
+  ipcMain.handle('html5:detectSDK', async (_, deviceId?: string) => {
+    try {
+      if (!html5Bridge) return { success: false, error: 'HTML5Bridge not initialized' }
+      const detected = await html5Bridge.detectSDK(deviceId)
+      return { success: detected }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('html5:isConnected', async () => {
+    return { success: true, connected: html5Bridge?.isSDKConnected() ?? false }
+  })
+
+  ipcMain.handle('html5:listCustomProperties', async () => {
+    try {
+      if (!html5Bridge?.isSDKConnected()) return { success: false, error: 'HTML5 SDK not connected' }
+      const properties = await html5Bridge.listCustomProperties()
+      return { success: true, properties }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('html5:listCustomActions', async () => {
+    try {
+      if (!html5Bridge?.isSDKConnected()) return { success: false, error: 'HTML5 SDK not connected' }
+      const actions = await html5Bridge.listCustomActions()
+      return { success: true, actions }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('html5:listCustomCommands', async () => {
+    try {
+      if (!html5Bridge?.isSDKConnected()) return { success: false, error: 'HTML5 SDK not connected' }
+      const commands = await html5Bridge.listCustomCommands()
+      return { success: true, commands }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('html5:getAvailableExtensions', async () => {
+    try {
+      if (!html5Bridge?.isSDKConnected()) return { success: false, error: 'HTML5 SDK not connected' }
+      const extensions = await html5Bridge.getAvailableExtensions()
+      return { success: true, extensions }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('html5:getCustomProperty', async (_, name: string) => {
+    try {
+      if (!html5Bridge?.isSDKConnected()) return { success: false, error: 'HTML5 SDK not connected' }
+      const value = await html5Bridge.getCustomProperty(name)
+      return { success: true, value }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('html5:executeCustomAction', async (_, name: string, args: string[]) => {
+    try {
+      if (!html5Bridge?.isSDKConnected()) return { success: false, error: 'HTML5 SDK not connected' }
+      const result = await html5Bridge.executeCustomAction(name, args)
+      return { success: result }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('html5:executeCustomCommand', async (_, name: string, param: string) => {
+    try {
+      if (!html5Bridge?.isSDKConnected()) return { success: false, error: 'HTML5 SDK not connected' }
+      const result = await html5Bridge.executeCustomCommand(name, param)
+      return { success: true, result }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  // Browser Device Manager IPC Handlers
+  ipcMain.handle('browserDevice:getAll', () => {
+    return browserDeviceManager?.getAll() ?? []
+  })
+
+  ipcMain.handle('browserDevice:add', (_, name: string, url: string, browserType: string) => {
+    if (!browserDeviceManager) throw new Error('BrowserDeviceManager not initialized')
+    return browserDeviceManager.add(name, url, (browserType as any) ?? 'chrome')
+  })
+
+  ipcMain.handle('browserDevice:update', (_, id: string, updates: { name?: string; url?: string; browserType?: string }) => {
+    if (!browserDeviceManager) throw new Error('BrowserDeviceManager not initialized')
+    return browserDeviceManager.update(id, updates as any)
+  })
+
+  ipcMain.handle('browserDevice:detectBrowsers', async () => {
+    if (!browserSessionManager) return []
+    return browserSessionManager.detectAvailableBrowsers()
+  })
+
+  ipcMain.handle('browserDevice:getVersions', async () => {
+    if (!browserSessionManager) return { chromium: process.versions.chrome ?? 'Unknown' }
+    return browserSessionManager.getBrowserVersions()
+  })
+
+  ipcMain.handle('browserDevice:openGame', async (_, id: string) => {
+    if (!browserDeviceManager || !browserSessionManager) return
+    const device = browserDeviceManager.getAll().find((d) => d.id === id)
+    if (!device) return
+    await browserSessionManager.stopSession()
+    await browserSessionManager.startSession(device.url, device.browserType)
+  })
+
+  ipcMain.handle('browserDevice:closeGame', async () => {
+    if (!browserSessionManager) return
+    await browserSessionManager.stopSession()
+  })
+
+  ipcMain.handle('browserDevice:delete', (_, id: string) => {
+    if (!browserDeviceManager) throw new Error('BrowserDeviceManager not initialized')
+    return browserDeviceManager.delete(id)
+  })
+
+  // Game Link Manager IPC Handlers
+  ipcMain.handle('gameLink:getAll', () => {
+    return gameLinkManager?.getAll() ?? []
+  })
+
+  ipcMain.handle('gameLink:add', (_, name: string, devUrl: string, stagingUrl: string, productionUrl: string) => {
+    if (!gameLinkManager) throw new Error('GameLinkManager not initialized')
+    return gameLinkManager.add(name, devUrl, stagingUrl, productionUrl)
+  })
+
+  ipcMain.handle('gameLink:update', (_, id: string, updates: { name?: string; devUrl?: string; stagingUrl?: string; productionUrl?: string }) => {
+    if (!gameLinkManager) throw new Error('GameLinkManager not initialized')
+    return gameLinkManager.update(id, updates)
+  })
+
+  ipcMain.handle('gameLink:delete', (_, id: string) => {
+    if (!gameLinkManager) throw new Error('GameLinkManager not initialized')
+    return gameLinkManager.delete(id)
+  })
+
+  // ── Browser Capture: inject into all frames (incl. cross-origin iframes) ────
+  // The renderer-side webview cannot execute JS in cross-origin sub-frames.
+  // From the main process we use WebFrameMain.executeJavaScript which CAN reach
+  // any frame. Sub-frames post events to the top frame; the top frame collects
+  // them with coordinate adjustment (iframe offset) in window.__pgQueue.
+
+  const browserCaptureAttachments = new Map<number, () => void>()
+
+  // Script injected into the TOP (main) frame:
+  //  • collects direct mousedown / keydown / wheel events
+  //  • listens for postMessage from sub-frames and adjusts coords using
+  //    getBoundingClientRect() on the matching <iframe> element
+  const TOP_FRAME_INJECT = `
+    (function() {
+      if (window.__pgTopFrame) return;
+      window.__pgTopFrame = true;
+      window.__pgQueue = window.__pgQueue || [];
+
+      window.addEventListener('message', function(e) {
+        if (!e.data || !e.data.__pg) return;
+        var off = { left: 0, top: 0 };
+        try {
+          var iframes = document.querySelectorAll('iframe');
+          for (var i = 0; i < iframes.length; i++) {
+            if (iframes[i].contentWindow === e.source) {
+              var r = iframes[i].getBoundingClientRect();
+              off = { left: r.left, top: r.top };
+              break;
+            }
+          }
+        } catch(ex) {}
+        var ev = { __pg: e.data.__pg };
+        if (e.data.__pg === 'tap') {
+          ev.x = Math.round((e.data.x || 0) + off.left);
+          ev.y = Math.round((e.data.y || 0) + off.top);
+        } else if (e.data.__pg === 'scroll') {
+          ev.dx = e.data.dx; ev.dy = e.data.dy;
+        } else if (e.data.__pg === 'key') {
+          ev.k = e.data.k; ev.c = e.data.c;
+        }
+        window.__pgQueue.push(ev);
+      });
+
+      document.addEventListener('mousedown', function(e) {
+        window.__pgQueue.push({ __pg: 'tap', x: Math.round(e.clientX), y: Math.round(e.clientY) });
+      }, true);
+      document.addEventListener('keydown', function(e) {
+        window.__pgQueue.push({ __pg: 'key', k: e.key, c: e.code });
+      }, true);
+      document.addEventListener('wheel', function(e) {
+        window.__pgQueue.push({ __pg: 'scroll', dx: Math.round(e.deltaX), dy: Math.round(e.deltaY) });
+      }, { passive: true, capture: true });
+    })();
+  `
+
+  // Script injected into every SUB-FRAME (including cross-origin iframes):
+  //  • captures mousedown / wheel and posts them to window.top
+  const FRAME_INJECT = `
+    (function() {
+      if (window.__pgFrameInjected) return;
+      window.__pgFrameInjected = true;
+      document.addEventListener('mousedown', function(e) {
+        try { window.top.postMessage({ __pg: 'tap', x: Math.round(e.clientX), y: Math.round(e.clientY) }, '*'); } catch(ex) {}
+      }, true);
+      document.addEventListener('wheel', function(e) {
+        try { window.top.postMessage({ __pg: 'scroll', dx: Math.round(e.deltaX), dy: Math.round(e.deltaY) }, '*'); } catch(ex) {}
+      }, { passive: true, capture: true });
+    })();
+  `
+
+  ipcMain.handle('recorder:attachBrowserCapture', async (_, wcId: number) => {
+    const wc = webContents.fromId(wcId)
+    if (!wc) return false
+
+    // Remove any previous attachment for this webContents
+    browserCaptureAttachments.get(wcId)?.()
+
+    const injectFrame = async (frame: any) => {
+      try { await frame.executeJavaScript(FRAME_INJECT) } catch {}
+    }
+
+    const injectAll = async () => {
+      try {
+        await wc.mainFrame.executeJavaScript(TOP_FRAME_INJECT)
+        const walkFrames = async (frame: any) => {
+          await injectFrame(frame)
+          for (const child of (frame.frames || [])) await walkFrames(child)
+        }
+        for (const frame of (wc.mainFrame.frames || [])) await walkFrames(frame)
+      } catch {}
+    }
+
+    const onFrameCreated = (_: any, details: any) => {
+      const { frame } = details
+      frame.once('dom-ready', () => injectFrame(frame))
+    }
+
+    wc.on('frame-created', onFrameCreated)
+    wc.on('did-finish-load', injectAll)
+    wc.on('did-navigate', injectAll)
+
+    browserCaptureAttachments.set(wcId, () => {
+      wc.off('frame-created', onFrameCreated)
+      wc.off('did-finish-load', injectAll)
+      wc.off('did-navigate', injectAll)
+    })
+
+    await injectAll()
+    return true
+  })
+
+  ipcMain.handle('recorder:detachBrowserCapture', (_, wcId: number) => {
+    browserCaptureAttachments.get(wcId)?.()
+    browserCaptureAttachments.delete(wcId)
+  })
+
   // Device Setup Manager IPC Handlers
   ipcMain.handle('setup:getAllProfiles', async () => {
     try {
@@ -1963,6 +2345,154 @@ function setupIPCHandlers(): void {
 
       const stats = prerequisiteVerifier.getCacheStats()
       return { success: true, stats }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  // ============================================================================
+  // Ad-Hoc Testing Handlers
+  // ============================================================================
+
+  ipcMain.handle('adhoc:startSession', async (_, deviceId: string) => {
+    try {
+      if (!adHocMonitor) {
+        throw new Error('Ad-Hoc monitor not initialized')
+      }
+
+      const session = await adHocMonitor.startSession(deviceId)
+      return { success: true, session }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  ipcMain.handle('adhoc:stopSession', async () => {
+    try {
+      if (!adHocMonitor) {
+        throw new Error('Ad-Hoc monitor not initialized')
+      }
+
+      const session = await adHocMonitor.stopSession()
+      return { success: true, session }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  ipcMain.handle('adhoc:getCurrentSession', async () => {
+    try {
+      if (!adHocMonitor) {
+        throw new Error('Ad-Hoc monitor not initialized')
+      }
+
+      const session = adHocMonitor.getCurrentSession()
+      return { success: true, session }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  ipcMain.handle('adhoc:captureScreenshot', async (_, description?: string) => {
+    try {
+      if (!adHocMonitor) {
+        throw new Error('Ad-Hoc monitor not initialized')
+      }
+
+      const event = await adHocMonitor.captureScreenshot(description)
+      return { success: true, event }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  ipcMain.handle('adhoc:markIssue', async (_, description: string, severity: 'low' | 'medium' | 'high' = 'medium') => {
+    try {
+      if (!adHocMonitor) {
+        throw new Error('Ad-Hoc monitor not initialized')
+      }
+
+      const event = await adHocMonitor.markIssue(description, severity)
+      return { success: true, event }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  ipcMain.handle('adhoc:markSuccess', async (_, description: string) => {
+    try {
+      if (!adHocMonitor) {
+        throw new Error('Ad-Hoc monitor not initialized')
+      }
+
+      const event = await adHocMonitor.markSuccess(description)
+      return { success: true, event }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  ipcMain.handle('adhoc:generateInsights', async () => {
+    try {
+      if (!adHocMonitor) {
+        throw new Error('Ad-Hoc monitor not initialized')
+      }
+
+      const insights = await adHocMonitor.generateInsights()
+      return { success: true, insights }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  ipcMain.handle('adhoc:loadSessions', async () => {
+    try {
+      if (!adHocMonitor) {
+        throw new Error('Ad-Hoc monitor not initialized')
+      }
+
+      const sessions = await adHocMonitor.loadSessions()
+      return { success: true, sessions }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  ipcMain.handle('adhoc:deleteSession', async (_, sessionId: string) => {
+    try {
+      if (!adHocMonitor) {
+        throw new Error('Ad-Hoc monitor not initialized')
+      }
+
+      await adHocMonitor.deleteSession(sessionId)
+      return { success: true }
     } catch (error) {
       return {
         success: false,

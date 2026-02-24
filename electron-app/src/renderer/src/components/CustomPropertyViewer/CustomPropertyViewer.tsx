@@ -32,13 +32,17 @@ interface PropertyValue {
 
 interface CustomPropertyViewerProps {
   isSDKConnected: boolean
+  sdkType?: 'unity' | 'html5'
   onRefresh?: () => void
 }
 
 export default function CustomPropertyViewer({
   isSDKConnected,
+  sdkType = 'unity',
   onRefresh
 }: CustomPropertyViewerProps): JSX.Element {
+  // Route API calls to the correct SDK
+  const sdkAPI = sdkType === 'html5' ? window.api.html5 : window.api.unity
   const [extensions, setExtensions] = useState<CustomExtensions>({
     properties: [],
     actions: [],
@@ -65,7 +69,7 @@ export default function CustomPropertyViewer({
   const loadExtensions = async () => {
     setLoading(true)
     try {
-      const result = await window.api.unity.getAvailableExtensions()
+      const result = await sdkAPI.getAvailableExtensions()
       if (result.success && result.extensions) {
         setExtensions(result.extensions)
         console.log('[CustomPropertyViewer] Loaded extensions:', result.extensions)
@@ -90,7 +94,7 @@ export default function CustomPropertyViewer({
     })
 
     try {
-      const result = await window.api.unity.getCustomProperty(propertyName)
+      const result = await sdkAPI.getCustomProperty(propertyName)
 
       setPropertyValues((prev) => {
         const newMap = new Map(prev)
@@ -127,7 +131,7 @@ export default function CustomPropertyViewer({
         .map((arg) => arg.trim())
         .filter((arg) => arg.length > 0)
 
-      const result = await window.api.unity.executeCustomAction(selectedAction, args)
+      const result = await sdkAPI.executeCustomAction(selectedAction, args)
 
       if (result.success) {
         alert(`Action '${selectedAction}' executed successfully!`)
@@ -165,12 +169,12 @@ export default function CustomPropertyViewer({
           <Eye className="w-4 h-4 text-muted-foreground" />
           <h3 className="font-medium text-foreground">Custom Properties</h3>
           <span className="text-xs px-2 py-0.5 rounded bg-muted text-muted-foreground border border-border">
-            SDK v2.0
+            {sdkType === 'html5' ? 'RUN.game' : 'SDK v2.0'}
           </span>
         </div>
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <AlertCircle className="w-4 h-4" />
-          Unity SDK not connected
+          {sdkType === 'html5' ? 'RUN.game HTML5 SDK' : 'Unity SDK'} not connected
         </div>
       </div>
     )
@@ -192,7 +196,7 @@ export default function CustomPropertyViewer({
           <Eye className="w-4 h-4 text-primary" />
           <h3 className="font-medium text-foreground">Custom Extensions</h3>
           <span className="text-xs px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
-            SDK v2.0
+            {sdkType === 'html5' ? 'RUN.game' : 'SDK v2.0'}
           </span>
           {hasExtensions && (
             <span className="text-xs text-muted-foreground">

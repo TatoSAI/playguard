@@ -3,7 +3,7 @@
  * Main settings interface with tabbed navigation for all configuration options
  */
 
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -21,7 +21,7 @@ import AISettings from './tabs/AISettings'
 import TestExecutionSettings from './tabs/TestExecutionSettings'
 import ReportingSettings from './tabs/ReportingSettings'
 import IntegrationsSettings from './tabs/IntegrationsSettings'
-import UnitySDKSettings from './tabs/UnitySDKSettings'
+import SDKIntegrationSettings from './tabs/SDKIntegrationSettings'
 import DeveloperSettings from './tabs/DeveloperSettings'
 import GeneralSettings from './tabs/GeneralSettings'
 import { useToast } from '../../hooks/useToast'
@@ -191,9 +191,9 @@ export default function SettingsDialog({ open, onOpenChange }: SettingsDialogPro
               <Link className="w-4 h-4" />
               <span className="text-xs">Integrations</span>
             </TabsTrigger>
-            <TabsTrigger value="unity" className="flex flex-col items-center gap-1 py-2">
+            <TabsTrigger value="sdk" className="flex flex-col items-center gap-1 py-2">
               <Puzzle className="w-4 h-4" />
-              <span className="text-xs">Unity SDK</span>
+              <span className="text-xs">SDK</span>
             </TabsTrigger>
             <TabsTrigger value="developer" className="flex flex-col items-center gap-1 py-2">
               <Code className="w-4 h-4" />
@@ -230,8 +230,8 @@ export default function SettingsDialog({ open, onOpenChange }: SettingsDialogPro
               <IntegrationsSettings settings={settings} updateSettings={updateSettings} />
             </TabsContent>
 
-            <TabsContent value="unity" className="mt-0">
-              <UnitySDKSettings settings={settings} updateSettings={updateSettings} />
+            <TabsContent value="sdk" className="mt-0">
+              <SDKIntegrationSettings settings={settings} updateSettings={updateSettings} />
             </TabsContent>
 
             <TabsContent value="developer" className="mt-0">

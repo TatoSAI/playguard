@@ -1,6 +1,7 @@
 /**
  * TestScriptParser Service
- * Parses YAML/TypeScript test scripts into TestCase models
+ * Parses YAML/TypeScript test scripts into TestCase models.
+ * Supports both Android (Unity) and Web HTML5 (RUN.studio / custom SDK) platforms.
  */
 
 import * as yaml from 'yaml'
@@ -22,6 +23,18 @@ export interface ValidationError {
   line?: number
 }
 
+// Actions that are valid for web/HTML5 tests
+const WEB_ACTIONS = new Set([
+  'navigate', 'click', 'type', 'scroll',
+  'wait_for_element', 'execute_js',
+  'sdk_property', 'sdk_action', 'sdk_command'
+])
+
+// Actions valid for Android/Unity tests
+const ANDROID_ACTIONS = new Set([
+  'tap', 'swipe', 'input', 'wait', 'assert'
+])
+
 export class TestScriptParser {
   /**
    * Parse YAML script content into a ParseResult
@@ -30,7 +43,6 @@ export class TestScriptParser {
     if (format === 'yaml') {
       return this.parseYAML(content)
     }
-    // TypeScript parsing not implemented yet
     throw new Error('TypeScript format not yet supported')
   }
 
@@ -53,13 +65,16 @@ export class TestScriptParser {
 
       const testCase = parsed.testCase
 
-      // Extract basic metadata
+      // Detect platform from testCase.platform field
+      const isWeb = testCase.platform === 'web'
+
       const partialTestCase: Partial<TestCase> = {
         name: testCase.name || '',
         description: testCase.description || '',
         tags: Array.isArray(testCase.tags) ? testCase.tags : [],
         steps: [],
-        recordingMode: 'element' // Default for scripted tests
+        recordingMode: isWeb ? 'html5' : 'element',
+        ...(isWeb ? { gameSDKType: 'html5' } : {})
       }
 
       // Parse steps
@@ -73,7 +88,6 @@ export class TestScriptParser {
 
       // Parse prerequisites (optional)
       if (testCase.prerequisites) {
-        // TODO: Parse prerequisites
         warnings.push('Prerequisites parsing not yet implemented')
       }
 
@@ -84,10 +98,7 @@ export class TestScriptParser {
         )
       }
 
-      return {
-        testCase: partialTestCase,
-        warnings
-      }
+      return { testCase: partialTestCase, warnings }
     } catch (error) {
       throw new Error(`YAML parsing error: ${error instanceof Error ? error.message : String(error)}`)
     }
@@ -99,61 +110,81 @@ export class TestScriptParser {
   private parseStep(step: any, index: number, warnings: string[], context = 'step'): TestStep {
     const stepId = step.id || `${context}_${index + 1}`
 
-    // Validate required fields
     if (!step.action) {
       warnings.push(`Step ${index + 1}: Missing "action" field`)
     }
 
-    // Parse target
+    // ── Target / selector resolution ────────────────────────────────────────
     let target: any = undefined
     if (step.target) {
       if (typeof step.target === 'string') {
-        // Element path string
-        target = {
-          method: 'gameObject',
-          value: step.target
-        }
+        target = { method: 'gameObject', value: step.target }
       } else if (typeof step.target === 'object') {
-        // Object with element and/or fallback
-        target = {
-          method: step.target.element ? 'gameObject' : 'coordinate',
-          value: step.target.element,
-          fallback: step.target.fallback
+        if (step.target.selector) {
+          // Web CSS selector
+          target = {
+            method: 'cssSelector',
+            value: step.target.selector,
+            fallback: step.target.fallback
+          }
+        } else {
+          // Unity / coordinate fallback
+          target = {
+            method: step.target.element ? 'gameObject' : 'coordinate',
+            value: step.target.element,
+            fallback: step.target.fallback
+          }
         }
       }
     }
 
-    // Build TestStep
+    // ── Build TestStep ───────────────────────────────────────────────────────
     const testStep: TestStep = {
       id: stepId,
       type: step.action,
       description: step.description || ''
     }
 
-    // Add target if present
-    if (target) {
-      testStep.target = target
-    }
+    if (target) testStep.target = target
 
-    // Add value if present (for input actions)
-    if (step.value !== undefined) {
-      testStep.value = step.value
-    }
+    if (step.value !== undefined) testStep.value = step.value
+    if (step.data !== undefined) testStep.data = step.data
 
-    // Add data if present
-    if (step.data !== undefined) {
-      testStep.data = step.data
-    }
-
-    // Handle duration for wait actions (convert to data.duration)
+    // ── Android-specific ────────────────────────────────────────────────────
     if (step.action === 'wait' && step.duration !== undefined) {
+      testStep.data = { ...testStep.data, duration: step.duration }
+    }
+
+    // ── Web-specific data fields ─────────────────────────────────────────────
+    if (step.action === 'navigate' && step.url) {
+      testStep.data = { ...testStep.data, url: step.url }
+    }
+    if (step.action === 'execute_js' && step.script) {
+      testStep.data = { ...testStep.data, script: step.script }
+    }
+    if (step.action === 'wait_for_element' && step.timeout !== undefined) {
+      testStep.data = { ...testStep.data, timeout: step.timeout }
+    }
+    if (step.action === 'scroll') {
       testStep.data = {
         ...testStep.data,
-        duration: step.duration
+        deltaX: step.data?.deltaX ?? 0,
+        deltaY: step.data?.deltaY ?? 0
       }
     }
 
-    // Parse options
+    // ── RUN.studio / HTML5 SDK steps ─────────────────────────────────────────
+    if (step.action === 'sdk_property' && step.name) {
+      testStep.data = { ...testStep.data, propertyName: step.name }
+    }
+    if (step.action === 'sdk_action' && step.name) {
+      testStep.data = { ...testStep.data, actionName: step.name, args: step.args ?? [] }
+    }
+    if (step.action === 'sdk_command' && step.name) {
+      testStep.data = { ...testStep.data, commandName: step.name, param: step.param ?? '' }
+    }
+
+    // ── Shared options ───────────────────────────────────────────────────────
     if (step.options || step.waitBefore || step.waitAfter || step.screenshot) {
       testStep.options = {
         ...step.options,
@@ -163,36 +194,30 @@ export class TestScriptParser {
       }
     }
 
-    // Parse validation
+    // ── Validation / assertion ───────────────────────────────────────────────
     if (step.validation) {
       testStep.assertion = {
         type: step.validation.type,
-        target: step.validation.target,
+        // Support both `target` (element path) and `selector` (CSS)
+        target: step.validation.target ?? step.validation.selector,
         expected: step.validation.expected,
         threshold: step.validation.threshold,
         timeout: step.validation.timeout
       }
+      // Store CSS selector separately if used
+      if (step.validation.selector) {
+        testStep.assertion.data = { selector: step.validation.selector }
+      }
     }
 
-    // Add element metadata if present
+    // ── Metadata ─────────────────────────────────────────────────────────────
     if (step.elementPath) testStep.elementPath = step.elementPath
     if (step.elementName) testStep.elementName = step.elementName
     if (step.elementType) testStep.elementType = step.elementType
-
-    // Test behavior controls
-    if (step.expectedOutcome) {
-      testStep.expectedOutcome = step.expectedOutcome
-    }
-    if (step.continueOnFailure !== undefined) {
-      testStep.continueOnFailure = step.continueOnFailure
-    }
-
-    // Store expected result (custom field)
+    if (step.expectedOutcome) testStep.expectedOutcome = step.expectedOutcome
+    if (step.continueOnFailure !== undefined) testStep.continueOnFailure = step.continueOnFailure
     if (step.expectedResult) {
-      testStep.data = {
-        ...testStep.data,
-        expectedResult: step.expectedResult
-      }
+      testStep.data = { ...testStep.data, expectedResult: step.expectedResult }
     }
 
     return testStep
@@ -203,60 +228,63 @@ export class TestScriptParser {
    */
   validate(parsed: ParseResult): ValidationResult {
     const errors: ValidationError[] = []
-
     const testCase = parsed.testCase
 
-    // Validate required fields
     if (!testCase.name || testCase.name.trim() === '') {
-      errors.push({
-        field: 'testCase.name',
-        message: 'Test name is required'
-      })
+      errors.push({ field: 'testCase.name', message: 'Test name is required' })
     }
 
     if (!testCase.steps || testCase.steps.length === 0) {
-      errors.push({
-        field: 'testCase.steps',
-        message: 'At least one step is required'
-      })
+      errors.push({ field: 'testCase.steps', message: 'At least one step is required' })
     }
 
-    // Validate each step
     testCase.steps?.forEach((step, index) => {
+      const n = index + 1
+      const allActions = new Set([...WEB_ACTIONS, ...ANDROID_ACTIONS])
+
       if (!step.type) {
+        errors.push({ field: `steps[${index}].type`, message: `Step ${n}: Action type is required` })
+        return
+      }
+
+      if (!allActions.has(step.type)) {
         errors.push({
           field: `steps[${index}].type`,
-          message: `Step ${index + 1}: Action type is required`
+          message: `Step ${n}: Unknown action "${step.type}". Valid: ${[...ANDROID_ACTIONS, ...WEB_ACTIONS].join(', ')}`
         })
       }
 
       if (!step.description || step.description.trim() === '') {
-        errors.push({
-          field: `steps[${index}].description`,
-          message: `Step ${index + 1}: Description is required`
-        })
+        errors.push({ field: `steps[${index}].description`, message: `Step ${n}: Description is required` })
       }
 
-      // Validate specific action types
+      // ── Android validations ──────────────────────────────────────────────
       if (step.type === 'input' && !step.value) {
-        errors.push({
-          field: `steps[${index}].value`,
-          message: `Step ${index + 1}: Input action requires a "value" field`
-        })
+        errors.push({ field: `steps[${index}].value`, message: `Step ${n}: "input" requires a "value" field` })
+      }
+      if (step.type === 'wait' && !step.data?.duration) {
+        errors.push({ field: `steps[${index}].data.duration`, message: `Step ${n}: "wait" requires a "duration" field` })
       }
 
-      if (step.type === 'wait' && !step.data?.duration) {
-        errors.push({
-          field: `steps[${index}].data.duration`,
-          message: `Step ${index + 1}: Wait action requires a "duration" field`
-        })
+      // ── Web validations ──────────────────────────────────────────────────
+      if (step.type === 'type' && !step.value) {
+        errors.push({ field: `steps[${index}].value`, message: `Step ${n}: "type" requires a "value" field` })
+      }
+      if (step.type === 'navigate' && !step.data?.url) {
+        errors.push({ field: `steps[${index}].data.url`, message: `Step ${n}: "navigate" requires a "url" field` })
+      }
+      if (step.type === 'execute_js' && !step.data?.script) {
+        errors.push({ field: `steps[${index}].data.script`, message: `Step ${n}: "execute_js" requires a "script" field` })
+      }
+      if (step.type === 'sdk_property' && !step.data?.propertyName) {
+        errors.push({ field: `steps[${index}].data.propertyName`, message: `Step ${n}: "sdk_property" requires a "name" field` })
+      }
+      if (step.type === 'sdk_action' && !step.data?.actionName) {
+        errors.push({ field: `steps[${index}].data.actionName`, message: `Step ${n}: "sdk_action" requires a "name" field` })
       }
     })
 
-    return {
-      valid: errors.length === 0,
-      errors
-    }
+    return { valid: errors.length === 0, errors }
   }
 
   /**
@@ -265,10 +293,7 @@ export class TestScriptParser {
   toTestCase(
     parsed: ParseResult,
     suiteId: string,
-    additionalMetadata: {
-      tags?: string[]
-      recordingDevice?: any
-    } = {}
+    additionalMetadata: { tags?: string[]; recordingDevice?: any } = {}
   ): TestCase {
     const validation = this.validate(parsed)
     if (!validation.valid) {
@@ -278,12 +303,11 @@ export class TestScriptParser {
     }
 
     const testCase = parsed.testCase
-
-    // Generate ID (will be overridden by TestCaseManager)
     const timestamp = Date.now()
     const id = `test_${timestamp}`
-
     const now = new Date().toISOString()
+
+    const isWeb = testCase.recordingMode === 'html5'
 
     return {
       id,
@@ -292,9 +316,10 @@ export class TestScriptParser {
       description: testCase.description || '',
       tags: additionalMetadata.tags || testCase.tags || [],
       recordingMode: testCase.recordingMode || 'element',
+      ...(isWeb ? { gameSDKType: 'html5' } : {}),
       recordingDevice: additionalMetadata.recordingDevice || {
-        id: 'scripted',
-        model: 'Scripted Test',
+        id: isWeb ? 'web-scripted' : 'scripted',
+        model: isWeb ? 'Web HTML5' : 'Scripted Test',
         manufacturer: 'PlayGuard',
         androidVersion: '',
         resolution: '',
@@ -319,10 +344,13 @@ export class TestScriptParser {
       throw new Error('TypeScript format not yet supported')
     }
 
+    const isWeb = (testCase as any).gameSDKType === 'html5' || testCase.recordingMode === 'html5'
+
     const scriptObject = {
       testCase: {
         name: testCase.name,
         description: testCase.description,
+        ...(isWeb ? { platform: 'web' } : {}),
         tags: testCase.tags,
         steps: testCase.steps.map((step) => this.stepToYAML(step)),
         ...(testCase.cleanup && testCase.cleanup.length > 0
@@ -331,10 +359,7 @@ export class TestScriptParser {
       }
     }
 
-    return yaml.stringify(scriptObject, {
-      indent: 2,
-      lineWidth: 0 // Don't wrap long lines
-    })
+    return yaml.stringify(scriptObject, { indent: 2, lineWidth: 0 })
   }
 
   /**
@@ -347,9 +372,14 @@ export class TestScriptParser {
       description: step.description
     }
 
-    // Add target
+    // ── Target ───────────────────────────────────────────────────────────────
     if (step.target) {
-      if (step.target.method === 'gameObject' && step.target.value) {
+      if (step.target.method === 'cssSelector') {
+        yamlStep.target = {
+          selector: step.target.value,
+          ...(step.target.fallback ? { fallback: step.target.fallback } : {})
+        }
+      } else if (step.target.method === 'gameObject' && step.target.value) {
         yamlStep.target = {
           element: step.target.value,
           ...(step.target.fallback ? { fallback: step.target.fallback } : {})
@@ -359,41 +389,47 @@ export class TestScriptParser {
       }
     }
 
-    // Add value for input actions
-    if (step.value !== undefined) {
-      yamlStep.value = step.value
-    }
+    // ── Value ─────────────────────────────────────────────────────────────────
+    if (step.value !== undefined) yamlStep.value = step.value
 
-    // Add options
+    // ── Web-specific inline fields ───────────────────────────────────────────
+    if (step.data?.url) yamlStep.url = step.data.url
+    if (step.data?.script) yamlStep.script = step.data.script
+    if (step.data?.propertyName) yamlStep.name = step.data.propertyName
+    if (step.data?.actionName) {
+      yamlStep.name = step.data.actionName
+      if (step.data.args?.length) yamlStep.args = step.data.args
+    }
+    if (step.data?.commandName) {
+      yamlStep.name = step.data.commandName
+      if (step.data.param) yamlStep.param = step.data.param
+    }
+    if (step.data?.timeout && step.type === 'wait_for_element') yamlStep.timeout = step.data.timeout
+    if (step.data?.duration) yamlStep.duration = step.data.duration
+
+    // ── Options ───────────────────────────────────────────────────────────────
     if (step.options) {
       if (step.options.waitBefore) yamlStep.waitBefore = step.options.waitBefore
       if (step.options.waitAfter) yamlStep.waitAfter = step.options.waitAfter
       if (step.options.screenshot) yamlStep.screenshot = step.options.screenshot
     }
 
-    // Add validation
+    // ── Validation ────────────────────────────────────────────────────────────
     if (step.assertion) {
+      const isCssTarget = step.assertion.data?.selector
       yamlStep.validation = {
         type: step.assertion.type,
-        ...(step.assertion.target ? { target: step.assertion.target } : {}),
+        ...(isCssTarget ? { selector: step.assertion.data!.selector } : {}),
+        ...(!isCssTarget && step.assertion.target ? { target: step.assertion.target } : {}),
         ...(step.assertion.expected !== undefined ? { expected: step.assertion.expected } : {}),
         ...(step.assertion.threshold !== undefined ? { threshold: step.assertion.threshold } : {}),
         ...(step.assertion.timeout !== undefined ? { timeout: step.assertion.timeout } : {})
       }
     }
 
-    // Add test behavior controls
-    if (step.expectedOutcome) {
-      yamlStep.expectedOutcome = step.expectedOutcome
-    }
-    if (step.continueOnFailure !== undefined) {
-      yamlStep.continueOnFailure = step.continueOnFailure
-    }
-
-    // Add expected result if present in data
-    if (step.data?.expectedResult) {
-      yamlStep.expectedResult = step.data.expectedResult
-    }
+    if (step.expectedOutcome) yamlStep.expectedOutcome = step.expectedOutcome
+    if (step.continueOnFailure !== undefined) yamlStep.continueOnFailure = step.continueOnFailure
+    if (step.data?.expectedResult) yamlStep.expectedResult = step.data.expectedResult
 
     return yamlStep
   }

@@ -7,6 +7,8 @@
 import { useState, useEffect } from 'react'
 import { Sparkles, X, Plus } from 'lucide-react'
 
+type TargetPlatform = 'Android' | 'iOS' | 'Web' | 'Cross-platform'
+
 interface Props {
   testName: string
   testDescription: string
@@ -18,6 +20,15 @@ interface Props {
   onSelectedSuiteIdChange: (suiteId: string) => void
   onSuitesLoaded?: (suites: any[]) => void
   showAIAssist?: boolean
+  /** When set, only suites with this targetPlatform (+ Cross-platform) are shown */
+  filterPlatform?: TargetPlatform
+}
+
+const PLATFORM_LABELS: Record<TargetPlatform, string> = {
+  Android: '📱 Android',
+  iOS: ' iOS',
+  Web: '🌐 Web',
+  'Cross-platform': '✦ Cross-platform'
 }
 
 export function TestMetadataForm({
@@ -30,19 +41,21 @@ export function TestMetadataForm({
   onTestTagsChange,
   onSelectedSuiteIdChange,
   onSuitesLoaded,
-  showAIAssist = true
+  showAIAssist = true,
+  filterPlatform
 }: Props) {
   const [suites, setSuites] = useState<any[]>([])
   const [tagInput, setTagInput] = useState('')
   const [showCreateSuite, setShowCreateSuite] = useState(false)
   const [newSuiteName, setNewSuiteName] = useState('')
   const [newSuiteDescription, setNewSuiteDescription] = useState('')
-  const [newSuitePlatform, setNewSuitePlatform] = useState<'Android' | 'iOS' | 'Web' | 'Cross-platform'>('Android')
+  const [newSuitePlatform, setNewSuitePlatform] = useState<TargetPlatform>(filterPlatform ?? 'Android')
+  const [newSuiteEnvironment, setNewSuiteEnvironment] = useState<'Development' | 'Staging' | 'Production' | 'Other'>('Development')
   const [isCreatingSuite, setIsCreatingSuite] = useState(false)
 
   useEffect(() => {
     loadSuites()
-  }, [])
+  }, [filterPlatform]) // reload when platform filter changes
 
   // Refresh suites when component becomes visible
   useEffect(() => {
@@ -55,6 +68,11 @@ export function TestMetadataForm({
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
   }, [])
 
+  // Sync default platform for new suite creation when filterPlatform changes
+  useEffect(() => {
+    if (filterPlatform) setNewSuitePlatform(filterPlatform)
+  }, [filterPlatform])
+
   const loadSuites = async () => {
     try {
       const result = await window.api.suite.list()
@@ -63,12 +81,26 @@ export function TestMetadataForm({
       const suiteList = result?.suites || []
 
       // Ensure suiteList is an array
-      const validSuiteList = Array.isArray(suiteList) ? suiteList : []
+      const allSuites: any[] = Array.isArray(suiteList) ? suiteList : []
+
+      // Filter by platform when required: show matching + Cross-platform suites
+      const validSuiteList = filterPlatform
+        ? allSuites.filter(
+            (s) => s.targetPlatform === filterPlatform || s.targetPlatform === 'Cross-platform'
+          )
+        : allSuites
+
       setSuites(validSuiteList)
 
-      // Notify parent component
+      // Notify parent component (unfiltered list for other uses)
       if (onSuitesLoaded) {
         onSuitesLoaded(validSuiteList)
+      }
+
+      // Clear selection if current suite no longer matches the filter
+      if (selectedSuiteId && filterPlatform) {
+        const selectedStillValid = validSuiteList.some((s) => s.id === selectedSuiteId)
+        if (!selectedStillValid) onSelectedSuiteIdChange('')
       }
 
       // Auto-select first suite if none selected
@@ -89,7 +121,10 @@ export function TestMetadataForm({
       const result = await window.api.suite.create({
         name: newSuiteName,
         description: newSuiteDescription,
-        targetPlatform: newSuitePlatform
+        environment: newSuiteEnvironment,
+        targetPlatform: newSuitePlatform,
+        tags: [],
+        testCaseIds: []
       })
 
       if (result.success && result.suite) {
@@ -244,14 +279,21 @@ export function TestMetadataForm({
           <label className="block text-sm font-medium text-foreground">
             Target Suite <span className="text-destructive">*</span>
           </label>
-          <button
-            onClick={() => setShowCreateSuite(true)}
-            className="flex items-center gap-1 px-2 py-1 text-xs text-primary hover:bg-primary/10 rounded transition-colors"
-            title="Create new suite"
-          >
-            <Plus className="w-3 h-3" />
-            New Suite
-          </button>
+          <div className="flex items-center gap-2">
+            {filterPlatform && (
+              <span className="text-xs px-2 py-0.5 rounded bg-primary/10 text-primary">
+                {PLATFORM_LABELS[filterPlatform]} only
+              </span>
+            )}
+            <button
+              onClick={() => setShowCreateSuite(true)}
+              className="flex items-center gap-1 px-2 py-1 text-xs text-primary hover:bg-primary/10 rounded transition-colors"
+              title="Create new suite"
+            >
+              <Plus className="w-3 h-3" />
+              New Suite
+            </button>
+          </div>
         </div>
         <select
           value={selectedSuiteId}
@@ -262,13 +304,15 @@ export function TestMetadataForm({
           <option value="">Select a suite...</option>
           {suites.map((suite) => (
             <option key={suite.id} value={suite.id}>
-              {suite.name}
+              {suite.name}{suite.targetPlatform ? ` (${suite.targetPlatform})` : ''}
             </option>
           ))}
         </select>
         {suites.length === 0 && (
           <p className="text-xs text-muted-foreground mt-1">
-            No suites found. Click "New Suite" to create one.
+            {filterPlatform
+              ? `No ${filterPlatform} suites found. Click "New Suite" to create one.`
+              : 'No suites found. Click "New Suite" to create one.'}
           </p>
         )}
       </div>
@@ -307,23 +351,37 @@ export function TestMetadataForm({
                 />
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-2">
-                  Target Platform <span className="text-destructive">*</span>
-                </label>
-                <select
-                  value={newSuitePlatform}
-                  onChange={(e) => setNewSuitePlatform(e.target.value as 'Android' | 'iOS' | 'Web' | 'Cross-platform')}
-                  className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                >
-                  <option value="Android">Android</option>
-                  <option value="iOS">iOS (Coming Soon)</option>
-                  <option value="Web">Web (Coming Soon)</option>
-                  <option value="Cross-platform">Cross-platform</option>
-                </select>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Select the operating system this suite targets
-                </p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-2">
+                    Platform <span className="text-destructive">*</span>
+                  </label>
+                  <select
+                    value={newSuitePlatform}
+                    onChange={(e) => setNewSuitePlatform(e.target.value as 'Android' | 'iOS' | 'Web' | 'Cross-platform')}
+                    className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                  >
+                    <option value="Android">Android</option>
+                    <option value="iOS">iOS</option>
+                    <option value="Web">Web</option>
+                    <option value="Cross-platform">Cross-platform</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-2">
+                    Environment <span className="text-destructive">*</span>
+                  </label>
+                  <select
+                    value={newSuiteEnvironment}
+                    onChange={(e) => setNewSuiteEnvironment(e.target.value as 'Development' | 'Staging' | 'Production' | 'Other')}
+                    className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                  >
+                    <option value="Development">Development</option>
+                    <option value="Staging">Staging</option>
+                    <option value="Production">Production</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-2">

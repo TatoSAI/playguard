@@ -1,10 +1,46 @@
+// Allow <webview> tag in JSX (Electron webview element)
+declare namespace JSX {
+  interface IntrinsicElements {
+    webview: React.DetailedHTMLProps<React.HTMLAttributes<HTMLElement>, HTMLElement> & {
+      src?: string
+      preload?: string
+      partition?: string
+      useragent?: string
+      disablewebsecurity?: string
+      allowpopups?: boolean
+      style?: React.CSSProperties
+      ref?: React.Ref<any>
+    }
+  }
+}
+
 export interface DeviceInfo {
   id: string
   model: string
+  marketName: string // friendly display name, e.g. "POCO X3 Pro"
   manufacturer: string
   androidVersion: string
   resolution: string
   isConnected: boolean
+}
+
+export type BrowserType = 'chrome' | 'edge' | 'firefox'
+
+export interface BrowserDevice {
+  id: string
+  name: string
+  url?: string // optional — legacy field, new devices don't store URL here
+  browserType: BrowserType
+  createdAt: string
+}
+
+export interface GameLink {
+  id: string // Format: game_UUID
+  name: string
+  devUrl: string
+  stagingUrl: string
+  productionUrl: string
+  createdAt: string
 }
 
 export interface TestCase {
@@ -27,6 +63,7 @@ declare global {
         getDevices: () => Promise<DeviceInfo[]>
         connect: (deviceId: string) => Promise<boolean>
         disconnect: (deviceId: string) => Promise<boolean>
+        captureScreenshot: (deviceId: string) => Promise<string>
       }
       test: {
         startRecording: (deviceId: string) => Promise<{ success: boolean; message: string }>
@@ -147,6 +184,37 @@ declare global {
         executeCustomAction: (name: string, args: string[]) => Promise<{ success: boolean; message?: string; error?: string }>
         executeCustomCommand: (name: string, param: string) => Promise<{ success: boolean; result?: any; error?: string }>
       }
+      html5: {
+        detectSDK: (deviceId?: string) => Promise<{ success: boolean; error?: string }>
+        isConnected: () => Promise<{ success: boolean; connected: boolean }>
+        listCustomProperties: () => Promise<{ success: boolean; properties?: string[]; error?: string }>
+        listCustomActions: () => Promise<{ success: boolean; actions?: string[]; error?: string }>
+        listCustomCommands: () => Promise<{ success: boolean; commands?: string[]; error?: string }>
+        getAvailableExtensions: () => Promise<{ success: boolean; extensions?: { properties: string[]; actions: string[]; commands: string[] }; error?: string }>
+        getCustomProperty: (name: string) => Promise<{ success: boolean; value?: string; error?: string }>
+        executeCustomAction: (name: string, args: string[]) => Promise<{ success: boolean; message?: string; error?: string }>
+        executeCustomCommand: (name: string, param: string) => Promise<{ success: boolean; result?: any; error?: string }>
+      }
+      browserDevice: {
+        getAll: () => Promise<BrowserDevice[]>
+        add: (name: string, url: string, browserType: BrowserType) => Promise<BrowserDevice>
+        update: (id: string, updates: { name?: string; url?: string; browserType?: BrowserType }) => Promise<BrowserDevice | null>
+        delete: (id: string) => Promise<boolean>
+        detectBrowsers: () => Promise<BrowserType[]>
+        getVersions: () => Promise<Record<string, string>>
+        openGame: (id: string) => Promise<void>
+        closeGame: () => Promise<void>
+      }
+      gameLink: {
+        getAll: () => Promise<GameLink[]>
+        add: (name: string, devUrl: string, stagingUrl: string, productionUrl: string) => Promise<GameLink>
+        update: (id: string, updates: { name?: string; devUrl?: string; stagingUrl?: string; productionUrl?: string }) => Promise<GameLink | null>
+        delete: (id: string) => Promise<boolean>
+      }
+      recorder: {
+        attachBrowserCapture: (webContentsId: number) => Promise<boolean>
+        detachBrowserCapture: (webContentsId: number) => Promise<void>
+      }
       setup: {
         getAllProfiles: () => Promise<{ success: boolean; profiles?: any[]; error?: string }>
         getProfile: (id: string) => Promise<{ success: boolean; profile?: any; error?: string }>
@@ -165,6 +233,17 @@ declare global {
         autoFixDependencies: (suiteId: string, fixType: 'add_missing' | 'reorder') => Promise<{ success: boolean; error?: string }>
         clearCache: () => Promise<{ success: boolean; error?: string }>
         getCacheStats: () => Promise<{ success: boolean; stats?: any; error?: string }>
+      }
+      adhoc: {
+        startSession: (deviceId: string) => Promise<{ success: boolean; session?: any; error?: string }>
+        stopSession: () => Promise<{ success: boolean; session?: any; error?: string }>
+        getCurrentSession: () => Promise<{ success: boolean; session?: any; error?: string }>
+        captureScreenshot: (description?: string) => Promise<{ success: boolean; event?: any; error?: string }>
+        markIssue: (description: string, severity?: 'low' | 'medium' | 'high') => Promise<{ success: boolean; event?: any; error?: string }>
+        markSuccess: (description: string) => Promise<{ success: boolean; event?: any; error?: string }>
+        generateInsights: () => Promise<{ success: boolean; insights?: any[]; error?: string }>
+        loadSessions: () => Promise<{ success: boolean; sessions?: any[]; error?: string }>
+        deleteSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>
       }
       on: {
         deviceAdded: (callback: (deviceInfo: DeviceInfo) => void) => void

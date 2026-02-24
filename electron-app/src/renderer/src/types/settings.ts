@@ -235,6 +235,29 @@ export interface CustomEventParameter {
   description?: string
 }
 
+// ==================== RUN.studio SDK Settings ====================
+export interface RunStudioSDKSettings {
+  // REST API Server (port 7777 — used by RUN.studio to push/pull test specs)
+  apiServer: {
+    enabled: boolean
+    port: number // default: 7777
+  }
+
+  // WebSocket Server (port 9876 — used by HTML5 game SDK during recording/playback)
+  webSocket: {
+    enabled: boolean
+    port: number // default: 9876
+  }
+
+  // Security
+  allowExternalConnections: boolean // if false, only 127.0.0.1 is accepted
+  authToken: string // optional bearer token to protect the API; empty = no auth
+
+  // Behavior
+  autoImportSpecs: boolean // auto-import test specs received from RUN.studio
+  autoExportResults: boolean // push execution results back to RUN.studio
+}
+
 // ==================== Custom Steps Settings ====================
 export interface CustomStepsSettings {
   enabled: boolean
@@ -307,6 +330,7 @@ export interface PlayGuardSettings {
   reporting: ReportingSettings
   integrations: IntegrationSettings
   unitySDK: UnitySDKSettings
+  runStudioSDK: RunStudioSDKSettings
   customSteps: CustomStepsSettings
   developer: DeveloperSettings
 
@@ -477,6 +501,21 @@ export const DEFAULT_SETTINGS: PlayGuardSettings = {
       cacheElements: true,
       cacheTimeout: 5000
     }
+  },
+
+  runStudioSDK: {
+    apiServer: {
+      enabled: true,
+      port: 7777
+    },
+    webSocket: {
+      enabled: true,
+      port: 9876
+    },
+    allowExternalConnections: false,
+    authToken: '',
+    autoImportSpecs: true,
+    autoExportResults: true
   },
 
   customSteps: {

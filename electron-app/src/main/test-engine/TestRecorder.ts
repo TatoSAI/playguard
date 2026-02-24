@@ -1,12 +1,15 @@
 import { EventEmitter } from 'events'
 import { ADBManager } from '../adb/ADBManager'
 import { UnityBridge, UIElement } from '../unity/UnityBridge'
+import { HTML5Bridge } from '../html5/HTML5Bridge'
 import { TouchEventMonitor } from './TouchEventMonitor'
+import { BrowserSessionManager } from '../services/BrowserSessionManager'
+import { BrowserDeviceManager } from '../services/BrowserDeviceManager'
 
 import { DeviceActionType } from '../types/models'
 
 export interface RecordedAction {
-  type: 'tap' | 'swipe' | 'text' | 'wait' | 'screenshot' | DeviceActionType
+  type: 'tap' | 'swipe' | 'text' | 'wait' | 'screenshot' | 'key' | 'scroll' | DeviceActionType
   timestamp: number
   data: any
   screenshot?: Buffer
@@ -25,27 +28,39 @@ export interface RecordingSession {
     model: string
   }
   // Recording mode
-  mode: 'coordinate' | 'element' // coordinate = fallback, element = SDK detected
+  mode: 'coordinate' | 'element' | 'html5' // coordinate = fallback, element = Unity SDK, html5 = HTML5 SDK
   sdkConnected: boolean
 }
 
 export class TestRecorder extends EventEmitter {
   private adbManager: ADBManager
   private unityBridge: UnityBridge
+  private html5Bridge: HTML5Bridge
+  private browserSessionManager: BrowserSessionManager
+  private browserDeviceManager: BrowserDeviceManager
   private touchMonitor: TouchEventMonitor | null = null
   private isRecording: boolean = false
   private currentSession: RecordingSession | null = null
   private lastScreenshot: Buffer | null = null
+  private lastBrowserScreenshot: string | null = null // base64 from Playwright session
   private recordingInterval: NodeJS.Timeout | null = null
   private uiElementsCache: UIElement[] = []
   private lastGestureTime: number = 0 // Track when last gesture was detected
 
-  constructor(adbManager: ADBManager) {
+  constructor(
+    adbManager: ADBManager,
+    html5Bridge: HTML5Bridge,
+    browserSessionManager: BrowserSessionManager,
+    browserDeviceManager: BrowserDeviceManager
+  ) {
     super()
     this.adbManager = adbManager
     this.unityBridge = new UnityBridge(adbManager)
+    this.html5Bridge = html5Bridge
+    this.browserSessionManager = browserSessionManager
+    this.browserDeviceManager = browserDeviceManager
 
-    // Listen for SDK events
+    // Listen for Unity SDK events
     this.unityBridge.on('sdkDetected', (deviceId) => {
       console.log(`[TestRecorder] Unity SDK detected, switching to element mode`)
       if (this.currentSession && this.currentSession.deviceId === deviceId) {
@@ -57,7 +72,26 @@ export class TestRecorder extends EventEmitter {
 
     this.unityBridge.on('sdkDisconnected', () => {
       console.log(`[TestRecorder] Unity SDK disconnected, falling back to coordinate mode`)
+      if (this.currentSession && this.currentSession.mode === 'element') {
+        this.currentSession.mode = 'coordinate'
+        this.currentSession.sdkConnected = false
+        this.emit('modeChanged', 'coordinate')
+      }
+    })
+
+    // Listen for HTML5 SDK events
+    this.html5Bridge.on('sdkDetected', () => {
+      console.log('[TestRecorder] HTML5 SDK detected, switching to html5 mode')
       if (this.currentSession) {
+        this.currentSession.mode = 'html5'
+        this.currentSession.sdkConnected = true
+        this.emit('modeChanged', 'html5')
+      }
+    })
+
+    this.html5Bridge.on('sdkDisconnected', () => {
+      console.log('[TestRecorder] HTML5 SDK disconnected, falling back to coordinate mode')
+      if (this.currentSession && this.currentSession.mode === 'html5') {
         this.currentSession.mode = 'coordinate'
         this.currentSession.sdkConnected = false
         this.emit('modeChanged', 'coordinate')
@@ -72,12 +106,35 @@ export class TestRecorder extends EventEmitter {
 
     console.log(`[TestRecorder] Starting recording for device ${deviceId}`)
 
+    // Browser device path — recording happens via embedded webview in renderer (no Playwright)
+    if (deviceId.startsWith('browser_')) {
+      // Look up saved browser device; also support virtual IDs like browser_chromium
+      const device = this.browserDeviceManager.getAll().find((d) => d.id === deviceId)
+      const browserName = device?.name ?? deviceId.replace('browser_', '').charAt(0).toUpperCase() + deviceId.replace('browser_', '').slice(1)
+
+      console.log(`[TestRecorder] Browser device detected — recording via inline webview (${browserName})`)
+
+      this.currentSession = {
+        deviceId,
+        startTime: Date.now(),
+        actions: [],
+        deviceInfo: { resolution: 'browser', model: `Browser (${browserName})` },
+        mode: 'coordinate',
+        sdkConnected: false
+      }
+      this.isRecording = true
+
+      this.emit('recordingStarted', { deviceId, mode: 'coordinate', sdkConnected: false })
+      return
+    }
+
+    // Android device path — existing flow below
     // Get device info
     const deviceInfo = await this.adbManager.getDeviceInfo(deviceId)
 
-    // Try to detect Unity SDK
+    // Try to detect Unity SDK, then HTML5 SDK, fallback to coordinate
     let sdkDetected = false
-    let mode: 'coordinate' | 'element' = 'coordinate'
+    let mode: 'coordinate' | 'element' | 'html5' = 'coordinate'
 
     try {
       console.log('[TestRecorder] Attempting to detect Unity SDK...')
@@ -90,7 +147,18 @@ export class TestRecorder extends EventEmitter {
         // Cache UI elements for faster lookups
         await this.refreshUIElementsCache()
       } else {
-        console.log('[TestRecorder] Unity SDK not detected - using coordinate-based recording')
+        console.log('[TestRecorder] Unity SDK not detected - trying HTML5 SDK...')
+        try {
+          sdkDetected = await this.html5Bridge.detectSDK(deviceId)
+          if (sdkDetected) {
+            mode = 'html5'
+            console.log('[TestRecorder] HTML5 SDK detected - using html5-based recording')
+          } else {
+            console.log('[TestRecorder] HTML5 SDK not detected - using coordinate-based recording')
+          }
+        } catch (html5Error) {
+          console.log('[TestRecorder] HTML5 SDK detection failed:', html5Error)
+        }
       }
     } catch (error) {
       console.log('[TestRecorder] SDK detection failed, falling back to coordinate mode:', error)
@@ -191,9 +259,12 @@ export class TestRecorder extends EventEmitter {
       this.recordingInterval = null
     }
 
-    // Disconnect Unity Bridge if connected
+    // Disconnect bridges if connected
     if (this.unityBridge.isSDKConnected()) {
       this.unityBridge.disconnect()
+    }
+    if (this.html5Bridge.isSDKConnected()) {
+      this.html5Bridge.disconnect()
     }
 
     // Stop touch event monitoring
@@ -208,6 +279,7 @@ export class TestRecorder extends EventEmitter {
     const session = this.currentSession
     this.currentSession = null
     this.lastScreenshot = null
+    this.lastBrowserScreenshot = null
 
     this.emit('recordingStopped', session)
 
@@ -215,7 +287,7 @@ export class TestRecorder extends EventEmitter {
   }
 
   async captureAction(
-    type: 'tap' | 'swipe' | 'text' | DeviceActionType,
+    type: 'tap' | 'swipe' | 'text' | 'key' | 'scroll' | DeviceActionType,
     data: any,
     captureScreenshot: boolean = true,
     skipExecution: boolean = false // Set to true when action already executed on device
@@ -247,21 +319,36 @@ export class TestRecorder extends EventEmitter {
       }
     }
 
-    // Execute the action on the device (unless it was already executed)
-    if (!skipExecution) {
+    const isBrowserDevice = this.currentSession.deviceId.startsWith('browser_')
+
+    // Execute the action on the device (unless already executed or it's a browser device)
+    if (!skipExecution && !isBrowserDevice) {
       try {
         switch (type) {
         case 'tap':
-          // If we have element data, try element-based tap first
-          if (elementData.elementPath && this.currentSession.sdkConnected) {
+          // Try Unity element-based tap first
+          if (elementData.elementPath && this.currentSession.mode === 'element' && this.currentSession.sdkConnected) {
             try {
               const success = await this.unityBridge.tapElement(elementData.elementPath)
               if (success) {
-                console.log(`[TestRecorder] Tapped element via SDK: ${elementData.elementPath}`)
+                console.log(`[TestRecorder] Tapped element via Unity SDK: ${elementData.elementPath}`)
                 break
               }
             } catch (error) {
-              console.warn('[TestRecorder] Element tap failed, falling back to coordinates')
+              console.warn('[TestRecorder] Unity element tap failed, falling back to coordinates')
+            }
+          }
+
+          // Try HTML5 element-based tap
+          if (elementData.elementPath && this.currentSession.mode === 'html5') {
+            try {
+              const success = await this.html5Bridge.tapElement(elementData.elementPath)
+              if (success) {
+                console.log(`[TestRecorder] Tapped element via HTML5 SDK: ${elementData.elementPath}`)
+                break
+              }
+            } catch (error) {
+              console.warn('[TestRecorder] HTML5 element tap failed, falling back to coordinates')
             }
           }
 
@@ -362,6 +449,19 @@ export class TestRecorder extends EventEmitter {
       }
     }
 
+    if (isBrowserDevice) {
+      // For browser devices: add action immediately — screenshots come from renderer's webview.capturePage()
+      const action: RecordedAction = {
+        type,
+        timestamp: Date.now(),
+        data,
+        ...elementData
+      }
+      this.addAction(action)
+      return
+    }
+
+    // Android device path — take screenshot synchronously before adding action
     let screenshot: Buffer | undefined
 
     if (captureScreenshot) {
@@ -468,6 +568,10 @@ export class TestRecorder extends EventEmitter {
     return this.lastScreenshot
   }
 
+  getLastBrowserScreenshot(): string | null {
+    return this.lastBrowserScreenshot
+  }
+
   /**
    * Refresh the cache of UI elements from Unity SDK
    */
@@ -536,7 +640,7 @@ export class TestRecorder extends EventEmitter {
   /**
    * Get current recording mode
    */
-  getRecordingMode(): 'coordinate' | 'element' | null {
+  getRecordingMode(): 'coordinate' | 'element' | 'html5' | null {
     return this.currentSession?.mode || null
   }
 
@@ -545,5 +649,19 @@ export class TestRecorder extends EventEmitter {
    */
   isSDKConnected(): boolean {
     return this.unityBridge.isSDKConnected()
+  }
+
+  /**
+   * Check if HTML5 SDK is currently connected
+   */
+  isHTML5SDKConnected(): boolean {
+    return this.html5Bridge.isSDKConnected()
+  }
+
+  /**
+   * Get the HTML5Bridge instance (for IPC handlers)
+   */
+  getHTML5Bridge(): HTML5Bridge {
+    return this.html5Bridge
   }
 }
