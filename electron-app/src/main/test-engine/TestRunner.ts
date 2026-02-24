@@ -655,6 +655,64 @@ export class TestRunner extends EventEmitter {
           await this.sleep(1000)
           break
 
+        // ── HTML5 SDK steps ────────────────────────────────────────────────────
+        case 'sdk_property': {
+          if (!this.html5Bridge?.isSDKConnected()) {
+            throw new Error('HTML5 SDK not connected — is the game running with PlayGuard SDK?')
+          }
+          const propName = processedStep.data?.propertyName
+          if (!propName) {
+            throw new Error('sdk_property step requires a "name" field specifying the property to read')
+          }
+          const value = await this.html5Bridge.getCustomProperty(propName)
+          if (value === null) {
+            throw new Error(`Property "${propName}" not found — is it registered with sdk.registerProperty()?`)
+          }
+          console.log(`[TestRunner] sdk_property "${propName}" = "${value}"`)
+          if (processedStep.assertion) {
+            await this.validateSDKValue(String(value), processedStep.assertion)
+          }
+          break
+        }
+
+        case 'sdk_action': {
+          if (!this.html5Bridge?.isSDKConnected()) {
+            throw new Error('HTML5 SDK not connected — is the game running with PlayGuard SDK?')
+          }
+          const actionName = processedStep.data?.actionName
+          if (!actionName) {
+            throw new Error('sdk_action step requires a "name" field specifying the action to execute')
+          }
+          const args: string[] = processedStep.data?.args ?? []
+          const success = await this.html5Bridge.executeCustomAction(actionName, args)
+          if (!success) {
+            throw new Error(`Action "${actionName}" failed — check the game registered it with sdk.registerAction()`)
+          }
+          console.log(`[TestRunner] sdk_action "${actionName}" executed successfully`)
+          break
+        }
+
+        case 'sdk_command': {
+          if (!this.html5Bridge?.isSDKConnected()) {
+            throw new Error('HTML5 SDK not connected — is the game running with PlayGuard SDK?')
+          }
+          const commandName = processedStep.data?.commandName
+          if (!commandName) {
+            throw new Error('sdk_command step requires a "name" field specifying the command to run')
+          }
+          const param = processedStep.data?.param ?? ''
+          const cmdResult = await this.html5Bridge.executeCustomCommand(commandName, param)
+          if (cmdResult === null || cmdResult === undefined) {
+            throw new Error(`Command "${commandName}" returned null — check it is registered with sdk.registerCommand()`)
+          }
+          const cmdStr = typeof cmdResult === 'string' ? cmdResult : JSON.stringify(cmdResult)
+          console.log(`[TestRunner] sdk_command "${commandName}" result: ${cmdStr}`)
+          if (processedStep.assertion) {
+            await this.validateSDKValue(cmdStr, processedStep.assertion)
+          }
+          break
+        }
+
         default:
           console.warn(`[TestRunner] Unknown step type: ${step.type}`)
       }
@@ -1339,5 +1397,45 @@ export class TestRunner extends EventEmitter {
 
   getCurrentTest(): TestCase | null {
     return this.currentTest
+  }
+
+  /**
+   * Validate a string value returned from an SDK step (sdk_property / sdk_command)
+   * against the step's assertion configuration.
+   * Throws on validation failure so the step is marked 'failed'.
+   */
+  private async validateSDKValue(value: string, assertion: any): Promise<void> {
+    const { type, expected } = assertion
+
+    switch (type) {
+      case 'value_equals':
+      case 'text_equals':
+        if (String(value) !== String(expected)) {
+          throw new Error(
+            `Assertion "${type}" failed: expected "${expected}", got "${value}"`
+          )
+        }
+        break
+
+      case 'text_contains':
+        if (!String(value).includes(String(expected))) {
+          throw new Error(
+            `Assertion "text_contains" failed: "${value}" does not contain "${expected}"`
+          )
+        }
+        break
+
+      case 'element_exists':
+        // Used after sdk_command getUIElements — checks the element name appears in result
+        if (!String(value).includes(String(expected ?? ''))) {
+          throw new Error(
+            `Assertion "element_exists" failed: element "${expected}" not found in SDK response`
+          )
+        }
+        break
+
+      default:
+        console.warn(`[TestRunner] validateSDKValue: unhandled assertion type "${type}", skipping`)
+    }
   }
 }
