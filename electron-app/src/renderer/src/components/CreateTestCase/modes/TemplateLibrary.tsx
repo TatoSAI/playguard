@@ -541,62 +541,62 @@ export const TEMPLATES: TestTemplate[] = [
   },
   {
     id: 'web_runstudio_sdk',
-    name: 'RUN.studio SDK Test',
-    description: 'Read game properties and execute SDK actions via HTML5 bridge',
+    name: 'PlayGuard SDK Test',
+    description: 'Read game properties, trigger actions and query commands via HTML5 SDK',
     category: 'web',
     template: `testCase:
-  name: "RUN.studio SDK Test"
+  name: "PlayGuard SDK Test"
   description: "Verify game state using PlayGuard HTML5 SDK"
   platform: web
-  tags: [web, sdk, runstudio]
+  tags: [web, sdk]
   suite: "Default"
+
+  # The browser opens automatically via the suite Game Link — no navigate step needed.
+  # Replace property/action/command names with the ones your game registers.
 
   steps:
     - id: step_1
-      action: navigate
-      url: "https://game.example.com"
-      description: "Open game with SDK"
-      expectedResult: "Game loads and SDK connects"
-
-    - id: step_2
-      action: wait_for_element
-      target:
-        selector: ".game-ready"
-      timeout: 15000
-      description: "Wait for SDK ready signal"
-      expectedResult: "SDK is connected"
-
-    - id: step_3
       action: sdk_property
-      name: "playerCoins"
+      name: "coins"
       description: "Read initial coin count"
       validation:
         type: value_equals
         expected: "0"
       expectedResult: "Player starts with 0 coins"
 
-    - id: step_4
-      action: sdk_action
-      name: "addCoins"
-      args: ["100"]
-      description: "Give player 100 coins via SDK"
-      expectedResult: "Coins added"
+    - id: step_2
+      action: sdk_command
+      name: "getUIElements"
+      description: "Verify coinButton is registered as a UI element"
+      validation:
+        type: text_contains
+        expected: "coinButton"
+      expectedResult: "coinButton element is available"
 
-    - id: step_5
+    - id: step_3
+      action: sdk_action
+      name: "giveCoins"
+      args: ["10"]
+      description: "Give player 10 coins via SDK action"
+      expectedResult: "Game adds 10 coins to internal state"
+
+    - id: step_4
       action: sdk_property
-      name: "playerCoins"
-      description: "Verify coins were added"
+      name: "coins"
+      description: "Verify coin count increased to 10"
       validation:
         type: value_equals
-        expected: "100"
-      expectedResult: "Player now has 100 coins"
+        expected: "10"
+      expectedResult: "Player now has 10 coins"
 
-    - id: step_6
-      action: sdk_action
-      name: "startLevel"
-      args: ["1"]
-      description: "Start level 1"
-      expectedResult: "Level 1 begins"
+    - id: step_5
+      action: sdk_command
+      name: "getFullState"
+      description: "Query full game state"
+      validation:
+        type: text_contains
+        expected: "coins"
+      expectedResult: "Full state includes coins field"
 `
   },
   {

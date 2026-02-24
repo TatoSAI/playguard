@@ -172,16 +172,29 @@ export class BrowserSessionManager extends EventEmitter {
     this.currentSession = null
   }
 
-  async executeAction(type: string, data: any): Promise<void> {
+  async executeAction(type: string, data: any): Promise<any> {
     if (!this.page) return
     try {
       if (type === 'tap') {
         await this.page.mouse.click(data.x, data.y)
       } else if (type === 'key') {
         await this.page.keyboard.press(data.k)
+      } else if (type === 'navigate') {
+        await this.page.goto(data.url, { waitUntil: 'domcontentloaded', timeout: 30000 })
+      } else if (type === 'click_selector') {
+        await this.page.click(data.selector, { timeout: data.timeout ?? 10000 })
+      } else if (type === 'type') {
+        await this.page.fill(data.selector, data.value, { timeout: data.timeout ?? 10000 })
+      } else if (type === 'wait_for_selector') {
+        await this.page.waitForSelector(data.selector, { timeout: data.timeout ?? 10000 })
+      } else if (type === 'scroll') {
+        await this.page.evaluate(({ dx, dy }: { dx: number; dy: number }) => window.scrollBy(dx, dy), data)
+      } else if (type === 'evaluate') {
+        return await this.page.evaluate(data.script)
       }
     } catch (err) {
       console.error('[BrowserSessionManager] executeAction error:', err)
+      throw err
     }
   }
 

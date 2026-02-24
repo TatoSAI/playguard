@@ -50,7 +50,7 @@ export class HTML5Bridge extends EventEmitter {
       this.wss = new WebSocketServer({ port: this.SDK_PORT })
       console.log(`[HTML5Bridge] WebSocket server listening on port ${this.SDK_PORT}`)
 
-      this.wss.on('connection', (ws: WebSocket) => {
+      this.wss.on('connection', async (ws: WebSocket) => {
         console.log('[HTML5Bridge] Game client connected')
         this.activeClient = ws
         this.messageBuffer = ''
@@ -92,6 +92,24 @@ export class HTML5Bridge extends EventEmitter {
         ws.on('error', (err) => {
           console.error('[HTML5Bridge] Client error:', err.message)
         })
+
+        // Auto-detect SDK: all event handlers are registered, now ping the client
+        // Small delay to let the game-side SDK finish its own onopen initialization
+        await new Promise((r) => setTimeout(r, 300))
+        try {
+          const response = await this.sendCommand({ command: 'ping' }).catch(() => ({
+            success: false
+          }))
+          if (response.success) {
+            this.sdkConnected = true
+            this.emit('sdkDetected')
+            console.log('[HTML5Bridge] PlayGuard SDK handshake complete — ready')
+          } else {
+            console.warn('[HTML5Bridge] Client connected but ping failed — not a PlayGuard SDK client')
+          }
+        } catch {
+          // Non-SDK client connected, leave sdkConnected = false
+        }
       })
 
       this.wss.on('error', (err: NodeJS.ErrnoException) => {
@@ -307,11 +325,16 @@ export class HTML5Bridge extends EventEmitter {
   async executeCustomCommand(name: string, param = ''): Promise<any> {
     if (!this.sdkConnected) return null
     try {
+      // Try as user-registered command first
       const response = await this.sendCommand({
         command: 'executeCustomCommand',
         parameters: { name, param }
       })
-      return response.success ? response.data : null
+      if (response.success) return response.data
+
+      // Not a user command — retry as a built-in command (e.g. getUIElements)
+      const builtin = await this.sendCommand({ command: name, parameters: { param } })
+      return builtin.success ? builtin.data : null
     } catch {
       return null
     }
@@ -336,6 +359,28 @@ export class HTML5Bridge extends EventEmitter {
 
   isSDKConnected(): boolean {
     return this.sdkConnected && this.activeClient?.readyState === WebSocket.OPEN
+  }
+
+  /**
+   * Wait until the SDK is connected (handshake complete) or timeout expires.
+   * Used by TestRunner before executing sdk_* steps so we don't fail on slow page loads.
+   */
+  waitForSDK(timeoutMs = 15000): Promise<boolean> {
+    if (this.isSDKConnected()) return Promise.resolve(true)
+
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        this.removeListener('sdkDetected', onDetected)
+        resolve(false)
+      }, timeoutMs)
+
+      const onDetected = () => {
+        clearTimeout(timer)
+        resolve(true)
+      }
+
+      this.once('sdkDetected', onDetected)
+    })
   }
 
   disconnect(): void {

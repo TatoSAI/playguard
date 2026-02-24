@@ -3,6 +3,7 @@ import { TestCase, TestStep } from './FileManager'
 import { ADBManager } from '../adb/ADBManager'
 import { UnityBridge } from '../unity/UnityBridge'
 import { HTML5Bridge } from '../html5/HTML5Bridge'
+import { BrowserSessionManager } from '../services/BrowserSessionManager'
 import { screenshotManager } from '../utils/ScreenshotManager'
 import { reportManager, ExecutionRecord } from '../services/ReportManager'
 import { executionStateManager } from '../services/ExecutionStateManager'
@@ -54,6 +55,7 @@ export class TestRunner extends EventEmitter {
   private dependencyValidator: DependencyValidator
   private unityBridge: UnityBridge | null = null
   private html5Bridge: HTML5Bridge | null = null
+  private browserSessionManager: BrowserSessionManager | null = null
   private isRunning: boolean = false
   private currentTest: TestCase | null = null
   private shouldStop: boolean = false
@@ -65,7 +67,8 @@ export class TestRunner extends EventEmitter {
     testCaseManager: TestCaseManager,
     dependencyValidator: DependencyValidator,
     unityBridge?: UnityBridge,
-    html5Bridge?: HTML5Bridge
+    html5Bridge?: HTML5Bridge,
+    browserSessionManager?: BrowserSessionManager
   ) {
     super()
     this.adbManager = adbManager
@@ -74,6 +77,7 @@ export class TestRunner extends EventEmitter {
     this.dependencyValidator = dependencyValidator
     this.unityBridge = unityBridge ?? null
     this.html5Bridge = html5Bridge ?? null
+    this.browserSessionManager = browserSessionManager ?? null
   }
 
   async runTest(
@@ -655,10 +659,78 @@ export class TestRunner extends EventEmitter {
           await this.sleep(1000)
           break
 
+        // ── Web browser steps (Playwright) ─────────────────────────────────────
+        case 'navigate': {
+          const bsm = this.browserSessionManager
+          if (!bsm?.isActive()) throw new Error('No active browser session — is a browser device selected?')
+          const url = processedStep.url ?? processedStep.data?.url
+          if (!url) throw new Error('navigate step requires a "url" field')
+          await bsm.executeAction('navigate', { url })
+          await this.sleep(1000)
+          break
+        }
+
+        case 'click': {
+          const bsm = this.browserSessionManager
+          if (!bsm?.isActive()) throw new Error('No active browser session')
+          const selector = processedStep.target?.selector ?? processedStep.data?.selector
+          const pos = processedStep.target?.fallback
+          if (selector) {
+            await bsm.executeAction('click_selector', { selector })
+          } else if (pos) {
+            await bsm.executeAction('tap', { x: pos.x, y: pos.y })
+          } else {
+            throw new Error('click step requires target.selector or target.fallback')
+          }
+          await this.sleep(500)
+          break
+        }
+
+        case 'type': {
+          const bsm = this.browserSessionManager
+          if (!bsm?.isActive()) throw new Error('No active browser session')
+          const typeSelector = processedStep.target?.selector ?? processedStep.data?.selector
+          const value = processedStep.value ?? processedStep.data?.value ?? ''
+          if (!typeSelector) throw new Error('type step requires target.selector')
+          await bsm.executeAction('type', { selector: typeSelector, value })
+          await this.sleep(300)
+          break
+        }
+
+        case 'wait_for_element': {
+          const bsm = this.browserSessionManager
+          if (!bsm?.isActive()) throw new Error('No active browser session')
+          const waitSelector = processedStep.target?.selector ?? processedStep.data?.selector
+          if (!waitSelector) throw new Error('wait_for_element step requires target.selector')
+          const timeout = processedStep.timeout ?? processedStep.data?.timeout ?? 10000
+          await bsm.executeAction('wait_for_selector', { selector: waitSelector, timeout })
+          break
+        }
+
+        case 'scroll': {
+          const bsm = this.browserSessionManager
+          if (!bsm?.isActive()) throw new Error('No active browser session')
+          const { dx = 0, dy = 0 } = processedStep.data ?? {}
+          await bsm.executeAction('scroll', { dx, dy })
+          await this.sleep(300)
+          break
+        }
+
+        case 'execute_js': {
+          const bsm = this.browserSessionManager
+          if (!bsm?.isActive()) throw new Error('No active browser session')
+          const script = processedStep.script ?? processedStep.data?.script
+          if (!script) throw new Error('execute_js step requires a "script" field')
+          await bsm.executeAction('evaluate', { script })
+          break
+        }
+
         // ── HTML5 SDK steps ────────────────────────────────────────────────────
         case 'sdk_property': {
-          if (!this.html5Bridge?.isSDKConnected()) {
-            throw new Error('HTML5 SDK not connected — is the game running with PlayGuard SDK?')
+          if (!this.html5Bridge) throw new Error('HTML5Bridge not available')
+          const sdkReady1 = await this.html5Bridge.waitForSDK(15000)
+          if (!sdkReady1) {
+            throw new Error('HTML5 SDK not connected after 15s — is the game running with PlayGuard SDK?')
           }
           const propName = processedStep.data?.propertyName
           if (!propName) {
@@ -676,8 +748,10 @@ export class TestRunner extends EventEmitter {
         }
 
         case 'sdk_action': {
-          if (!this.html5Bridge?.isSDKConnected()) {
-            throw new Error('HTML5 SDK not connected — is the game running with PlayGuard SDK?')
+          if (!this.html5Bridge) throw new Error('HTML5Bridge not available')
+          const sdkReady2 = await this.html5Bridge.waitForSDK(15000)
+          if (!sdkReady2) {
+            throw new Error('HTML5 SDK not connected after 15s — is the game running with PlayGuard SDK?')
           }
           const actionName = processedStep.data?.actionName
           if (!actionName) {
@@ -693,8 +767,10 @@ export class TestRunner extends EventEmitter {
         }
 
         case 'sdk_command': {
-          if (!this.html5Bridge?.isSDKConnected()) {
-            throw new Error('HTML5 SDK not connected — is the game running with PlayGuard SDK?')
+          if (!this.html5Bridge) throw new Error('HTML5Bridge not available')
+          const sdkReady3 = await this.html5Bridge.waitForSDK(15000)
+          if (!sdkReady3) {
+            throw new Error('HTML5 SDK not connected after 15s — is the game running with PlayGuard SDK?')
           }
           const commandName = processedStep.data?.commandName
           if (!commandName) {

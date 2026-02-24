@@ -249,7 +249,7 @@ app.whenReady().then(async () => {
   html5Bridge.startServer()
 
   // Test engine
-  testRunner = new TestRunner(adbManager, prerequisiteVerifier, testCaseManager, dependencyValidator, undefined, html5Bridge)
+  testRunner = new TestRunner(adbManager, prerequisiteVerifier, testCaseManager, dependencyValidator, undefined, html5Bridge, browserSessionManager)
   testRecorder = new TestRecorder(adbManager, html5Bridge, browserSessionManager, browserDeviceManager)
 
   // RUN.studio sync API
@@ -399,19 +399,55 @@ function setupIPCHandlers(): void {
     }
   })
 
+  // ── Helper: resolve game URL and open browser for web tests ────────────────
+  async function openBrowserForWebTest(deviceId: string, suite: any): Promise<boolean> {
+    if (!deviceId.startsWith('browser_') || !browserSessionManager || !browserDeviceManager) {
+      return false
+    }
+    const device = browserDeviceManager.getAll().find((d) => d.id === deviceId)
+    if (!device) return false
+
+    let url: string = (device as any).url || ''
+
+    // Prefer URL from game link (resolves to correct environment)
+    if (suite?.gameLinkId && gameLinkManager) {
+      const gameLink = gameLinkManager.getAll().find((g) => g.id === suite.gameLinkId)
+      if (gameLink) {
+        const env = suite.environment
+        url =
+          env === 'Development' ? gameLink.devUrl
+          : env === 'Staging'   ? gameLink.stagingUrl
+          : env === 'Production' ? gameLink.productionUrl
+          : gameLink.devUrl || gameLink.stagingUrl || gameLink.productionUrl
+      }
+    }
+
+    if (!url) {
+      console.warn('[IPC] No URL resolved for web test — skipping browser open')
+      return false
+    }
+
+    console.log(`[IPC] Opening browser for web test: ${url} (${device.browserType})`)
+    await browserSessionManager.startSession(url, device.browserType)
+    return true
+  }
+
   // Test Playback
   ipcMain.handle('test:run', async (_, deviceId: string, testCase: any) => {
     if (!adbManager || !testRunner || !suiteManager) throw new Error('Managers not initialized')
 
+    let browserOpened = false
     try {
-      // Get suite info for reporting
+      // Get suite info for reporting and URL resolution
       let suiteName = 'Unknown Suite'
+      let suite: any = null
       if (testCase.suiteId) {
-        const suite = await suiteManager.getSuite(testCase.suiteId)
-        if (suite) {
-          suiteName = suite.name
-        }
+        suite = await suiteManager.getSuite(testCase.suiteId)
+        if (suite) suiteName = suite.name
       }
+
+      // For browser devices: open the game before running steps
+      browserOpened = await openBrowserForWebTest(deviceId, suite)
 
       const result = await testRunner.runTest(deviceId, testCase, testCase.suiteId, suiteName)
       return {
@@ -424,6 +460,8 @@ function setupIPCHandlers(): void {
         success: false,
         message: error instanceof Error ? error.message : String(error)
       }
+    } finally {
+      if (browserOpened) await browserSessionManager?.stopSession()
     }
   })
 
@@ -431,6 +469,7 @@ function setupIPCHandlers(): void {
   ipcMain.handle('suite:run', async (_, deviceId: string, suiteId: string, stopOnFirstFailure: boolean = true) => {
     if (!adbManager || !testRunner || !suiteManager) throw new Error('Managers not initialized')
 
+    let browserOpened = false
     try {
       // Get suite
       const suite = await suiteManager.getSuite(suiteId)
@@ -442,6 +481,9 @@ function setupIPCHandlers(): void {
       }
 
       console.log(`[IPC] Starting suite execution: ${suite.name}`)
+
+      // For browser devices: open the game before running steps
+      browserOpened = await openBrowserForWebTest(deviceId, suite)
 
       // Run suite with dependency ordering
       const result = await testRunner.runSuite(deviceId, suite, stopOnFirstFailure)
@@ -459,6 +501,8 @@ function setupIPCHandlers(): void {
         success: false,
         message: error instanceof Error ? error.message : String(error)
       }
+    } finally {
+      if (browserOpened) await browserSessionManager?.stopSession()
     }
   })
 
