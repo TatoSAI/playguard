@@ -14,6 +14,7 @@ interface AdHocEvent {
   description?: string
   metadata?: Record<string, any>
   // SDK enrichment
+  sdkQueried?: boolean
   elementName?: string
   elementPath?: string
   elementType?: string
@@ -63,6 +64,7 @@ export default function AdHocTesting(): JSX.Element {
   const [dialogInput, setDialogInput] = useState('')
   const [currentTime, setCurrentTime] = useState(Date.now())
   const [currentScreenshot, setCurrentScreenshot] = useState<string | null>(null)
+  const [sdkStatus, setSdkStatus] = useState<{ connected: boolean; type: 'unity' | 'html5' | null }>({ connected: false, type: null })
 
   const toastContext = useToast()
   const toast = toastContext || {
@@ -100,6 +102,18 @@ export default function AdHocTesting(): JSX.Element {
       return () => clearInterval(interval)
     }
     return undefined
+  }, [isActive])
+
+  // Poll SDK status every 3 seconds while active
+  useEffect(() => {
+    if (!isActive) return
+    const poll = async () => {
+      const status = await window.api.adhoc.getSdkStatus().catch(() => ({ connected: false, type: null as any }))
+      setSdkStatus(status)
+    }
+    poll()
+    const interval = setInterval(poll, 3000)
+    return () => clearInterval(interval)
   }, [isActive])
 
   // Update screenshot preview every 3 seconds — Android only (browser devices use inline webview)
@@ -443,6 +457,21 @@ export default function AdHocTesting(): JSX.Element {
               </button>
             </div>
 
+            {/* SDK Status */}
+            <div className="mb-2">
+              {sdkStatus.connected ? (
+                <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-green-500/10 border border-green-500/20 text-green-400 text-xs font-medium">
+                  <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+                  SDK ({sdkStatus.type === 'unity' ? 'Unity' : 'HTML5'}) — tap enrichment active
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-muted border border-border text-muted-foreground text-xs">
+                  <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground" />
+                  SDK not connected
+                </div>
+              )}
+            </div>
+
             {/* Stats Summary */}
             <div className="grid grid-cols-4 gap-2">
               <div className="text-center">
@@ -769,6 +798,8 @@ export default function AdHocTesting(): JSX.Element {
 function AdHocWebviewPanel({ url, isActive }: { url: string; isActive: boolean }): JSX.Element {
   const webviewRef = useRef<any>(null)
   const attachedWcIdRef = useRef<number | null>(null)
+  const lastNavUrlRef = useRef<string>('')
+  const navDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Attach browser capture & navigation listeners once on mount
   useEffect(() => {
@@ -786,12 +817,19 @@ function AdHocWebviewPanel({ url, isActive }: { url: string; isActive: boolean }
     const onNavigate = (e: any) => {
       const navUrl: string = e.url || ''
       if (!navUrl || navUrl === 'about:blank') return
-      window.api.adhoc.addEvent({
-        type: 'navigate',
-        screenHash: `url_${navUrl}`,
-        screenName: navUrl.replace(/^https?:\/\//, '').split('?')[0].slice(0, 60),
-        description: `Navigated to ${navUrl}`
-      }).catch(() => {})
+      // Deduplicate: skip if same URL as last reported (handles did-navigate + did-navigate-in-page firing together)
+      if (navUrl === lastNavUrlRef.current) return
+      // Debounce: wait 800ms so rapid redirect chains only log the final URL
+      if (navDebounceRef.current) clearTimeout(navDebounceRef.current)
+      navDebounceRef.current = setTimeout(() => {
+        lastNavUrlRef.current = navUrl
+        window.api.adhoc.addEvent({
+          type: 'navigate',
+          screenHash: `url_${navUrl}`,
+          screenName: navUrl.replace(/^https?:\/\//, '').split('?')[0].slice(0, 60),
+          description: `Navigated to ${navUrl}`
+        }).catch(() => {})
+      }, 800)
     }
 
     const onNewWindow = (e: any) => { try { wv.loadURL(e.url) } catch {} }
@@ -858,8 +896,8 @@ function EventItem({ event, index }: EventItemProps): JSX.Element {
   const [isExpanded, setIsExpanded] = useState(false)
 
   return (
-    <div className="p-3 rounded-lg border border-border bg-card hover:bg-accent transition-colors cursor-pointer" onClick={() => setIsExpanded(!isExpanded)}>
-      <div className="flex items-start gap-3">
+    <div className="p-3 rounded-lg border border-border bg-card transition-colors">
+      <div className="flex items-start gap-3 cursor-pointer hover:bg-accent/50 rounded -mx-1 px-1" onClick={() => setIsExpanded(!isExpanded)}>
         <span className="text-lg">{getEventIcon(event.type)}</span>
 
         <div className="flex-1 min-w-0">
@@ -878,9 +916,13 @@ function EventItem({ event, index }: EventItemProps): JSX.Element {
                 SUCCESS
               </span>
             )}
-            {event.elementName && (
-              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-500/10 text-green-500 border border-green-500/20">
-                SDK
+            {event.sdkQueried && (
+              <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium border ${
+                event.elementName
+                  ? 'bg-green-500/10 text-green-500 border-green-500/20'
+                  : 'bg-blue-500/10 text-blue-400 border-blue-500/20'
+              }`}>
+                SDK{event.elementName ? ` · ${event.elementName}` : ''}
               </span>
             )}
           </div>
@@ -901,45 +943,114 @@ function EventItem({ event, index }: EventItemProps): JSX.Element {
       </div>
 
       {isExpanded && (
-        <div className="mt-3 pt-3 border-t border-border space-y-3">
+        <div className="mt-3 pt-3 border-t border-border space-y-3" onClick={e => e.stopPropagation()}>
+          {/* Copy button */}
+          <div className="flex justify-end">
+            <button
+              className="text-[10px] px-2 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              onClick={() => {
+                const lines: string[] = []
+                if (event.description) lines.push(event.description)
+                if (event.elementName) lines.push(`Element: ${event.elementName} (${event.elementType})`)
+                if (event.elementPath && event.elementPath !== event.elementName) lines.push(`Path: ${event.elementPath}`)
+                if (event.metadata?.tapX != null) lines.push(`Tap: (${event.metadata.tapX}, ${event.metadata.tapY})`)
+                if (event.metadata?.nearestElement) lines.push(`SDK nearest: "${event.metadata.nearestElement}" @ ${event.metadata.nearestElementPos ?? '?'} (${event.metadata.nearestDist}px)`)
+                if (event.gameState && Object.keys(event.gameState).length > 0) {
+                  lines.push('Game State:')
+                  Object.entries(event.gameState).forEach(([k, v]) => lines.push(`  ${k}: ${v ?? 'null'}`))
+                }
+                navigator.clipboard.writeText(lines.join('\n')).catch(() => {})
+              }}
+            >
+              Copy
+            </button>
+          </div>
           {/* SDK Element */}
-          {(event.elementName || event.elementPath) && (
+          {event.sdkQueried && (
             <div>
-              <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">Element</p>
-              <div className="flex items-center gap-2">
-                {event.elementType && (
-                  <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                    {event.elementType}
-                  </span>
-                )}
-                <span className="text-xs font-mono text-foreground">{event.elementName || event.elementPath}</span>
-              </div>
-              {event.elementPath && event.elementName && (
-                <p className="text-[10px] font-mono text-muted-foreground mt-0.5 truncate">{event.elementPath}</p>
+              <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">SDK Element</p>
+              {event.elementName ? (
+                <>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {event.elementType && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                        {event.elementType}
+                      </span>
+                    )}
+                    <span className="text-xs font-mono text-foreground">{event.elementName}</span>
+                    {event.metadata?.hitByBounds ? (
+                      <span className="px-1 py-0.5 rounded text-[10px] bg-green-500/10 text-green-500 border border-green-500/20">exact hit</span>
+                    ) : event.metadata?.matchDist != null ? (
+                      <span className="px-1 py-0.5 rounded text-[10px] bg-muted text-muted-foreground border border-border">{event.metadata.matchDist}px</span>
+                    ) : null}
+                  </div>
+                  {event.elementPath && event.elementPath !== event.elementName && (
+                    <p className="text-[10px] font-mono text-muted-foreground mt-0.5 truncate">{event.elementPath}</p>
+                  )}
+                </>
+              ) : (
+                <div className="text-[10px] text-muted-foreground space-y-0.5">
+                  {(event.metadata?.sdkElements ?? 0) > 0 ? (
+                    <>
+                      <p className="italic">No element matched at this position</p>
+                      <p className="font-mono">
+                        {event.metadata!.sdkElements} element{event.metadata!.sdkElements !== 1 ? 's' : ''} registered
+                        {event.metadata!.nearestElement ? ` · nearest: "${event.metadata!.nearestElement}" (${event.metadata!.nearestDist}px away)` : ''}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="italic">No elements registered in this SDK session</p>
+                  )}
+                </div>
               )}
             </div>
           )}
 
           {/* Game State */}
-          {event.gameState && Object.keys(event.gameState).length > 0 && (
+          {event.sdkQueried && (
             <div>
               <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">Game State</p>
-              <div className="space-y-0.5">
-                {Object.entries(event.gameState).map(([key, value]) => (
-                  <div key={key} className="flex items-center justify-between text-xs">
-                    <span className="font-mono text-muted-foreground">{key}</span>
-                    <span className="font-mono text-foreground ml-2 max-w-[140px] truncate">{value ?? 'null'}</span>
-                  </div>
-                ))}
-              </div>
+              {event.gameState && Object.keys(event.gameState).length > 0 ? (
+                <div className="space-y-0.5">
+                  {Object.entries(event.gameState).map(([key, value]) => (
+                    <div key={key} className="flex items-center justify-between text-xs">
+                      <span className="font-mono text-muted-foreground">{key}</span>
+                      <span className="font-mono text-foreground ml-2 max-w-[140px] truncate">{value ?? 'null'}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-[10px] text-muted-foreground italic">No custom properties registered</p>
+              )}
             </div>
           )}
 
-          {/* Raw metadata */}
-          {event.metadata && (
+          {/* Coordinate diagnostics — visible whenever SDK was queried on a tap */}
+          {event.sdkQueried && event.metadata?.tapX != null && (
             <div>
-              <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">Metadata</p>
-              <pre className="text-xs font-mono text-muted-foreground overflow-x-auto">{JSON.stringify(event.metadata, null, 2)}</pre>
+              <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">Coordinates</p>
+              <div className="font-mono text-[11px] space-y-0.5">
+                <div className="flex gap-4">
+                  <span className="text-muted-foreground w-20">Tap</span>
+                  <span className="text-foreground">({event.metadata.tapX}, {event.metadata.tapY})</span>
+                </div>
+                {event.metadata.nearestElement && (
+                  <div className="flex gap-4">
+                    <span className="text-muted-foreground w-20">SDK nearest</span>
+                    <span className="text-foreground">
+                      "{event.metadata.nearestElement}" @ {event.metadata.nearestElementPos ?? '?'}
+                    </span>
+                  </div>
+                )}
+                {event.metadata.nearestDist != null && (
+                  <div className="flex gap-4">
+                    <span className="text-muted-foreground w-20">Distance</span>
+                    <span className={`font-bold ${event.metadata.nearestDist <= 10 ? 'text-green-400' : event.metadata.nearestDist <= 50 ? 'text-yellow-400' : 'text-red-400'}`}>
+                      {event.metadata.nearestDist}px
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>

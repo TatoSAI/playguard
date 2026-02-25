@@ -243,6 +243,7 @@ declare global {
         markSuccess: (description: string) => Promise<{ success: boolean; event?: any; error?: string }>
         generateInsights: () => Promise<{ success: boolean; insights?: any[]; error?: string }>
         addEvent: (eventData: any) => Promise<{ success: boolean; error?: string }>
+        getSdkStatus: () => Promise<{ connected: boolean; type: 'unity' | 'html5' | null }>
         loadSessions: () => Promise<{ success: boolean; sessions?: any[]; error?: string }>
         deleteSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>
       }

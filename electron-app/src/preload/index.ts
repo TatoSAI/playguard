@@ -284,6 +284,8 @@ const api = {
       ipcRenderer.invoke('adhoc:generateInsights'),
     addEvent: (eventData: any) =>
       ipcRenderer.invoke('adhoc:addEvent', eventData),
+    getSdkStatus: () =>
+      ipcRenderer.invoke('adhoc:getSdkStatus'),
     loadSessions: () =>
       ipcRenderer.invoke('adhoc:loadSessions'),
     deleteSession: (sessionId: string) =>

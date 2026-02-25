@@ -2516,6 +2516,16 @@ function setupIPCHandlers(): void {
     }
   })
 
+  ipcMain.handle('adhoc:getSdkStatus', () => {
+    const unity = testRecorder?.getUnityBridge()
+    const unityConnected = unity?.isSDKConnected() ?? false
+    const html5Connected = html5Bridge?.isSDKConnected() ?? false
+    return {
+      connected: unityConnected || html5Connected,
+      type: unityConnected ? 'unity' : html5Connected ? 'html5' : null
+    }
+  })
+
   ipcMain.handle('adhoc:addEvent', async (_event, eventData: any) => {
     try {
       if (!adHocMonitor) throw new Error('Ad-Hoc monitor not initialized')
@@ -2529,7 +2539,9 @@ function setupIPCHandlers(): void {
       ) {
         enrichment = await adHocMonitor.enrichTap(eventData.x, eventData.y)
         if (enrichment.elementName) {
-          enrichment.description = `Tap on "${enrichment.elementName}" (${enrichment.elementType}) at (${Math.round(eventData.x)}, ${Math.round(eventData.y)})`
+          const dist = (enrichment as any).metadata?.matchDist
+          const sdkPos = (enrichment as any).metadata?.nearestElementPos ?? ''
+          enrichment.description = `Tap on "${enrichment.elementName}" (${enrichment.elementType}) at (${Math.round(eventData.x)}, ${Math.round(eventData.y)}) · sdk${sdkPos} ${dist != null ? dist + 'px' : ''}`
         }
       }
 

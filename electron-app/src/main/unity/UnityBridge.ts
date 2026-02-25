@@ -8,6 +8,8 @@ export interface UIElement {
   type: string
   active: boolean
   position: { x: number; y: number; z: number }
+  /** Optional bounding box — enables exact hit testing instead of distance-to-center */
+  size?: { width: number; height: number }
   text?: string
   interactable?: boolean
 }

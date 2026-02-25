@@ -9,7 +9,7 @@ import { app } from 'electron'
 import * as crypto from 'crypto'
 import { ADBManager } from '../adb/ADBManager'
 import { TouchEventMonitor } from '../test-engine/TouchEventMonitor'
-import { ISdkBridge, UIElement, findElementAtPosition, captureGameState } from '../utils/SdkEnrichment'
+import { ISdkBridge, UIElement, findElementAtPosition, captureGameState, diagnosticElementSearch, elementDistance } from '../utils/SdkEnrichment'
 
 export interface AdHocEvent {
   id: string
@@ -22,6 +22,7 @@ export interface AdHocEvent {
   description?: string // For issues/successes
   metadata?: Record<string, any>
   // SDK enrichment (when SDK is connected)
+  sdkQueried?: boolean  // true when SDK was active at tap time (even if no element matched)
   elementName?: string
   elementPath?: string
   elementType?: string
@@ -77,16 +78,34 @@ export class AdHocMonitor {
   private unityBridge: ISdkBridge | null = null
   private html5Bridge: ISdkBridge | null = null
   private elementsCache: UIElement[] = []
+  /** Last elementTapped event received from the HTML5 SDK (event-driven detection) */
+  private lastElementTapped: { element: string; tapX: number; tapY: number; elementX: number; elementY: number; dist: number; ts: number } | null = null
 
   constructor(adbManager: ADBManager, unityBridge?: ISdkBridge, html5Bridge?: ISdkBridge) {
     this.adbManager = adbManager
     this.unityBridge = unityBridge ?? null
-    this.html5Bridge = html5Bridge ?? null
+    this.setHtml5Bridge(html5Bridge ?? null)
   }
 
   /** Inject UnityBridge after construction (shared instance from TestRecorder) */
   setUnityBridge(bridge: ISdkBridge): void {
     this.unityBridge = bridge
+  }
+
+  /** Inject or replace HTML5Bridge, wiring up elementTapped event listener */
+  setHtml5Bridge(bridge: ISdkBridge | null): void {
+    // Remove old listener if present
+    if (this.html5Bridge && typeof (this.html5Bridge as any).removeListener === 'function') {
+      ;(this.html5Bridge as any).removeListener('elementTapped', this.onElementTapped)
+    }
+    this.html5Bridge = bridge
+    if (bridge && typeof (bridge as any).on === 'function') {
+      ;(bridge as any).on('elementTapped', this.onElementTapped)
+    }
+  }
+
+  private onElementTapped = (data: any): void => {
+    this.lastElementTapped = { ...data, ts: Date.now() }
   }
 
   /** Returns the first connected SDK bridge, or null if neither is connected */
@@ -101,9 +120,53 @@ export class AdHocMonitor {
     const bridge = this.getActiveBridge()
     if (!bridge) return {}
     try {
-      const element = findElementAtPosition(this.elementsCache, x, y)
       const gameState = await captureGameState(bridge)
-      const enrichment: Partial<AdHocEvent> = { gameState }
+
+      // Prefer event-driven detection (SDK sends elementTapped on pointerdown)
+      // Accept if received within the last 800ms — covers the polling delay
+      const evtDriven = this.lastElementTapped
+      if (evtDriven && (Date.now() - evtDriven.ts) < 800) {
+        this.lastElementTapped = null // consume
+        console.log(`[AdHocMonitor] event-driven tap → "${evtDriven.element}" (${evtDriven.dist}px from element center)`)
+        return {
+          sdkQueried: true,
+          gameState,
+          elementName: evtDriven.element,
+          elementPath: evtDriven.element,
+          elementType: 'HTML5Element',
+          metadata: {
+            tapX: evtDriven.tapX,
+            tapY: evtDriven.tapY,
+            elementX: evtDriven.elementX,
+            elementY: evtDriven.elementY,
+            nearestDist: evtDriven.dist,
+            detectionMethod: 'event-driven'
+          }
+        }
+      }
+
+      // Fallback: proximity matching (used for Unity SDK or when event arrives late)
+      const elements = await bridge.getUIElements()
+      const element = findElementAtPosition(elements, x, y)
+      const diag = diagnosticElementSearch(elements, x, y)
+      const matchDist = element ? elementDistance(element, x, y) : null
+      const nearestEl = elements.find(e => e.active && e.name === diag.closestName)
+      console.log(`[AdHocMonitor] proximity tap(${Math.round(x)},${Math.round(y)}) → ${diag.count} elements, nearest: "${diag.closestName}" at ${diag.closestDist}px → ${element ? `matched: "${element.name}"` : 'no match'}`)
+
+      const enrichment: Partial<AdHocEvent> = {
+        sdkQueried: true,
+        gameState,
+        metadata: {
+          tapX: Math.round(x),
+          tapY: Math.round(y),
+          sdkElements: diag.count,
+          nearestElement: diag.closestName,
+          nearestElementPos: nearestEl ? `(${Math.round(nearestEl.position.x)}, ${Math.round(nearestEl.position.y)})` : null,
+          nearestDist: diag.closestDist,
+          detectionMethod: 'proximity',
+          ...(element ? { matchedElement: element.name, matchDist } : { matched: false })
+        }
+      }
       if (element) {
         enrichment.elementName = element.name
         enrichment.elementPath = element.path
@@ -111,7 +174,7 @@ export class AdHocMonitor {
       }
       return enrichment
     } catch {
-      return {}
+      return { sdkQueried: true }
     }
   }
 

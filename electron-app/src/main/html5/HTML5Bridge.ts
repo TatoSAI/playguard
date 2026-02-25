@@ -140,6 +140,9 @@ export class HTML5Bridge extends EventEmitter {
         this.pendingRequests.delete(msg.id)
         pending.resolve({ success: msg.success, data: msg.data, error: msg.error })
       }
+    } else if (msg.type === 'event' && msg.event) {
+      // Unsolicited event from the game SDK (e.g. elementTapped)
+      this.emit(msg.event, msg.data)
     }
   }
 
