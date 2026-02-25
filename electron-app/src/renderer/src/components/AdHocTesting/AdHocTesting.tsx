@@ -58,7 +58,6 @@ export default function AdHocTesting(): JSX.Element {
   const [dialogInput, setDialogInput] = useState('')
   const [currentTime, setCurrentTime] = useState(Date.now())
   const [currentScreenshot, setCurrentScreenshot] = useState<string | null>(null)
-  const webviewRef = useRef<any>(null)
 
   const toastContext = useToast()
   const toast = toastContext || {
@@ -75,81 +74,6 @@ export default function AdHocTesting(): JSX.Element {
       if (links.length > 0) setSelectedGameLinkId(links[0].id)
     })
   }, [])
-
-  // Handle new-window redirects in the webview during active web session
-  useEffect(() => {
-    if (!isActive || !connectedDevice?.startsWith('browser_')) return
-    const wv = webviewRef.current
-    if (!wv) return
-    const onNewWindow = (e: any) => { try { wv.loadURL(e.url) } catch {} }
-    wv.addEventListener('new-window', onNewWindow)
-    return () => wv.removeEventListener('new-window', onNewWindow)
-  }, [isActive, connectedDevice])
-
-  // Capture web events: navigation changes + clicks via webview events
-  useEffect(() => {
-    if (!isActive || !connectedDevice?.startsWith('browser_')) return
-    const wv = webviewRef.current
-    if (!wv) return
-
-    const onNavigate = (e: any) => {
-      const url: string = e.url || ''
-      if (!url || url === 'about:blank') return
-      window.api.adhoc.addEvent({
-        type: 'screen_change',
-        screenHash: `url_${url}`,
-        screenName: url.replace(/^https?:\/\//, '').split('?')[0].slice(0, 60),
-        description: `Navigated to ${url}`
-      }).catch(() => {})
-    }
-
-    const onDomReady = () => {
-      // Inject click tracker — communicates back via console-message with __PG__ prefix
-      wv.executeJavaScript(`
-        (function() {
-          if (window.__pgClickTracked) return;
-          window.__pgClickTracked = true;
-          document.addEventListener('click', function(e) {
-            var t = e.target;
-            var sel = t.tagName.toLowerCase();
-            if (t.id) sel += '#' + t.id;
-            else if (t.className && typeof t.className === 'string') sel += '.' + t.className.trim().split(/\\s+/).join('.');
-            var txt = (t.innerText || t.value || t.alt || '').trim().slice(0, 40);
-            console.log('__PG__' + JSON.stringify({type:'click', selector: sel, text: txt, x: e.clientX, y: e.clientY}));
-          }, true);
-        })();
-      `).catch(() => {})
-    }
-
-    const onConsoleMessage = (e: any) => {
-      const msg: string = e.message || ''
-      if (!msg.startsWith('__PG__')) return
-      try {
-        const data = JSON.parse(msg.slice(6))
-        if (data.type === 'click') {
-          window.api.adhoc.addEvent({
-            type: 'tap',
-            description: `Click on ${data.selector}${data.text ? ` "${data.text}"` : ''}`,
-            x: data.x,
-            y: data.y,
-            metadata: { selector: data.selector }
-          }).catch(() => {})
-        }
-      } catch {}
-    }
-
-    wv.addEventListener('did-navigate', onNavigate)
-    wv.addEventListener('did-navigate-in-page', onNavigate)
-    wv.addEventListener('dom-ready', onDomReady)
-    wv.addEventListener('console-message', onConsoleMessage)
-
-    return () => {
-      wv.removeEventListener('did-navigate', onNavigate)
-      wv.removeEventListener('did-navigate-in-page', onNavigate)
-      wv.removeEventListener('dom-ready', onDomReady)
-      wv.removeEventListener('console-message', onConsoleMessage)
-    }
-  }, [isActive, connectedDevice])
 
   // Update timer every second when session is active
   useEffect(() => {
@@ -587,13 +511,7 @@ export default function AdHocTesting(): JSX.Element {
                   {webEnvironment === 'Development' ? 'Dev' : webEnvironment === 'Production' ? 'Prod' : webEnvironment}
                 </span>
               </div>
-              <webview
-                ref={webviewRef}
-                src={resolvedWebUrl()}
-                partition="persist:games"
-                allowpopups={true}
-                style={{ flex: 1, width: '100%', minHeight: 0 }}
-              />
+              <AdHocWebviewPanel url={resolvedWebUrl()} isActive={isActive} />
             </div>
           ) : (
           <div className="w-full max-w-md">
@@ -838,6 +756,91 @@ export default function AdHocTesting(): JSX.Element {
         </div>
       )}
     </div>
+  )
+}
+
+// ─── AdHocWebviewPanel ───────────────────────────────────────────────────────
+// Separate component so useEffect([]) runs on mount — webviewRef is always set.
+function AdHocWebviewPanel({ url, isActive }: { url: string; isActive: boolean }): JSX.Element {
+  const webviewRef = useRef<any>(null)
+  const attachedWcIdRef = useRef<number | null>(null)
+
+  // Attach browser capture & navigation listeners once on mount
+  useEffect(() => {
+    const wv = webviewRef.current
+    if (!wv) return
+
+    const onDomReady = async () => {
+      const wcId: number = wv.getWebContentsId()
+      if (wcId > 0 && wcId !== attachedWcIdRef.current) {
+        attachedWcIdRef.current = wcId
+        await window.api.recorder.attachBrowserCapture(wcId).catch(() => {})
+      }
+    }
+
+    const onNavigate = (e: any) => {
+      const navUrl: string = e.url || ''
+      if (!navUrl || navUrl === 'about:blank') return
+      window.api.adhoc.addEvent({
+        type: 'navigate',
+        screenHash: `url_${navUrl}`,
+        screenName: navUrl.replace(/^https?:\/\//, '').split('?')[0].slice(0, 60),
+        description: `Navigated to ${navUrl}`
+      }).catch(() => {})
+    }
+
+    const onNewWindow = (e: any) => { try { wv.loadURL(e.url) } catch {} }
+
+    wv.addEventListener('dom-ready', onDomReady)
+    wv.addEventListener('did-navigate', onNavigate)
+    wv.addEventListener('did-navigate-in-page', onNavigate)
+    wv.addEventListener('new-window', onNewWindow)
+
+    return () => {
+      wv.removeEventListener('dom-ready', onDomReady)
+      wv.removeEventListener('did-navigate', onNavigate)
+      wv.removeEventListener('did-navigate-in-page', onNavigate)
+      wv.removeEventListener('new-window', onNewWindow)
+      if (attachedWcIdRef.current) {
+        window.api.recorder.detachBrowserCapture(attachedWcIdRef.current).catch(() => {})
+        attachedWcIdRef.current = null
+      }
+    }
+  }, [])
+
+  // Poll __pgQueue every 150ms while session is active — same pattern as TestRecorder
+  useEffect(() => {
+    if (!isActive) return
+    const poll = setInterval(async () => {
+      const wv = webviewRef.current
+      if (!wv) return
+      try {
+        const items: any[] = await wv.executeJavaScript(
+          'var q = window.__pgQueue || []; window.__pgQueue = []; q'
+        )
+        for (const item of items) {
+          if (item.__pg === 'tap') {
+            window.api.adhoc.addEvent({
+              type: 'tap',
+              description: `Click at (${Math.round(item.x)}, ${Math.round(item.y)})`,
+              x: item.x,
+              y: item.y
+            }).catch(() => {})
+          }
+        }
+      } catch { /* webview may not be ready */ }
+    }, 150)
+    return () => clearInterval(poll)
+  }, [isActive])
+
+  return (
+    <webview
+      ref={webviewRef}
+      src={url}
+      partition="persist:games"
+      allowpopups={"true" as any}
+      style={{ flex: 1, width: '100%', minHeight: 0 }}
+    />
   )
 }
 
