@@ -1,12 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react'
-import { Zap, Play, Square, Clock, Lightbulb, AlertCircle, CheckCircle2, Camera, Flag, FileText, Sparkles, Smartphone, Globe } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Zap, Play, Square, Clock, Lightbulb, AlertCircle, CheckCircle2, Camera, FileText, Sparkles, Smartphone, Globe } from 'lucide-react'
 import { Button } from '../ui/button'
 import { useToast } from '../Common/ToastProvider'
 
 interface AdHocEvent {
   id: string
   timestamp: number
-  type: 'screen_change' | 'manual_capture' | 'issue_marked' | 'success_marked' | 'session_start' | 'session_stop' | 'tap' | 'swipe' | 'double_tap'
+  type: 'screen_change' | 'manual_capture' | 'issue_marked' | 'success_marked' | 'session_start' | 'session_stop' | 'tap' | 'swipe' | 'double_tap' | 'navigate'
   screenHash: string
   screenName?: string
   duration?: number
@@ -86,6 +86,71 @@ export default function AdHocTesting(): JSX.Element {
     return () => wv.removeEventListener('new-window', onNewWindow)
   }, [isActive, connectedDevice])
 
+  // Capture web events: navigation changes + clicks via webview events
+  useEffect(() => {
+    if (!isActive || !connectedDevice?.startsWith('browser_')) return
+    const wv = webviewRef.current
+    if (!wv) return
+
+    const onNavigate = (e: any) => {
+      const url: string = e.url || ''
+      if (!url || url === 'about:blank') return
+      window.api.adhoc.addEvent({
+        type: 'screen_change',
+        screenHash: `url_${url}`,
+        screenName: url.replace(/^https?:\/\//, '').split('?')[0].slice(0, 60),
+        description: `Navigated to ${url}`
+      }).catch(() => {})
+    }
+
+    const onDomReady = () => {
+      // Inject click tracker — communicates back via console-message with __PG__ prefix
+      wv.executeJavaScript(`
+        (function() {
+          if (window.__pgClickTracked) return;
+          window.__pgClickTracked = true;
+          document.addEventListener('click', function(e) {
+            var t = e.target;
+            var sel = t.tagName.toLowerCase();
+            if (t.id) sel += '#' + t.id;
+            else if (t.className && typeof t.className === 'string') sel += '.' + t.className.trim().split(/\\s+/).join('.');
+            var txt = (t.innerText || t.value || t.alt || '').trim().slice(0, 40);
+            console.log('__PG__' + JSON.stringify({type:'click', selector: sel, text: txt, x: e.clientX, y: e.clientY}));
+          }, true);
+        })();
+      `).catch(() => {})
+    }
+
+    const onConsoleMessage = (e: any) => {
+      const msg: string = e.message || ''
+      if (!msg.startsWith('__PG__')) return
+      try {
+        const data = JSON.parse(msg.slice(6))
+        if (data.type === 'click') {
+          window.api.adhoc.addEvent({
+            type: 'tap',
+            description: `Click on ${data.selector}${data.text ? ` "${data.text}"` : ''}`,
+            x: data.x,
+            y: data.y,
+            metadata: { selector: data.selector }
+          }).catch(() => {})
+        }
+      } catch {}
+    }
+
+    wv.addEventListener('did-navigate', onNavigate)
+    wv.addEventListener('did-navigate-in-page', onNavigate)
+    wv.addEventListener('dom-ready', onDomReady)
+    wv.addEventListener('console-message', onConsoleMessage)
+
+    return () => {
+      wv.removeEventListener('did-navigate', onNavigate)
+      wv.removeEventListener('did-navigate-in-page', onNavigate)
+      wv.removeEventListener('dom-ready', onDomReady)
+      wv.removeEventListener('console-message', onConsoleMessage)
+    }
+  }, [isActive, connectedDevice])
+
   // Update timer every second when session is active
   useEffect(() => {
     if (isActive) {
@@ -94,6 +159,7 @@ export default function AdHocTesting(): JSX.Element {
       }, 1000)
       return () => clearInterval(timer)
     }
+    return undefined
   }, [isActive])
 
   // Poll for session updates every 2 seconds
@@ -104,6 +170,7 @@ export default function AdHocTesting(): JSX.Element {
       }, 2000)
       return () => clearInterval(interval)
     }
+    return undefined
   }, [isActive])
 
   // Update screenshot preview every 3 seconds — Android only (browser devices use inline webview)
@@ -125,6 +192,7 @@ export default function AdHocTesting(): JSX.Element {
       return () => clearInterval(interval)
     } else {
       setCurrentScreenshot(null)
+      return undefined
     }
   }, [isActive, connectedDevice])
 
@@ -402,57 +470,6 @@ export default function AdHocTesting(): JSX.Element {
             </>
           )}
 
-          {/* Feature Cards */}
-          <div className="space-y-3">
-            <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-              Features
-            </div>
-            <div className="p-3 rounded-lg bg-card border border-border">
-              <div className="flex items-start gap-3">
-                <div className="text-2xl">📸</div>
-                <div>
-                  <div className="text-sm font-medium text-foreground">Selective Capture</div>
-                  <div className="text-xs text-muted-foreground mt-1">
-                    Screenshots only when you need them
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div className="p-3 rounded-lg bg-card border border-border">
-              <div className="flex items-start gap-3">
-                <div className="text-2xl">🤖</div>
-                <div>
-                  <div className="text-sm font-medium text-foreground">AI Insights</div>
-                  <div className="text-xs text-muted-foreground mt-1">
-                    Pattern analysis without images
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div className="p-3 rounded-lg bg-card border border-border">
-              <div className="flex items-start gap-3">
-                <div className="text-2xl">⚠️</div>
-                <div>
-                  <div className="text-sm font-medium text-foreground">Issue Tracking</div>
-                  <div className="text-xs text-muted-foreground mt-1">
-                    Mark problems with context
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div className="p-3 rounded-lg bg-card border border-border">
-              <div className="flex items-start gap-3">
-                <div className="text-2xl">💾</div>
-                <div>
-                  <div className="text-sm font-medium text-foreground">Space Efficient</div>
-                  <div className="text-xs text-muted-foreground mt-1">
-                    10-50MB vs 600MB+ traditional
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
           {/* Start Button */}
           <button
             onClick={startSession}
@@ -574,7 +591,7 @@ export default function AdHocTesting(): JSX.Element {
                 ref={webviewRef}
                 src={resolvedWebUrl()}
                 partition="persist:games"
-                allowpopups=""
+                allowpopups={true}
                 style={{ flex: 1, width: '100%', minHeight: 0 }}
               />
             </div>
@@ -833,7 +850,7 @@ function EventItem({ event, index }: EventItemProps): JSX.Element {
   const [isExpanded, setIsExpanded] = useState(false)
 
   return (
-    <div className="p-3 rounded-lg border border-border bg-card hover:bg-accent transition-colors">
+    <div className="p-3 rounded-lg border border-border bg-card hover:bg-accent transition-colors cursor-pointer" onClick={() => setIsExpanded(!isExpanded)}>
       <div className="flex items-start gap-3">
         <span className="text-lg">{getEventIcon(event.type)}</span>
 
@@ -890,6 +907,7 @@ function getEventIcon(type: string): string {
     case 'tap': return '👆'
     case 'double_tap': return '👆👆'
     case 'swipe': return '👉'
+    case 'navigate': return '🌐'
     default: return '•'
   }
 }

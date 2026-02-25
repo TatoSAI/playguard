@@ -13,7 +13,7 @@ import { TouchEventMonitor } from '../test-engine/TouchEventMonitor'
 export interface AdHocEvent {
   id: string
   timestamp: number
-  type: 'screen_change' | 'manual_capture' | 'issue_marked' | 'success_marked' | 'session_start' | 'session_stop' | 'tap' | 'swipe' | 'double_tap'
+  type: 'screen_change' | 'manual_capture' | 'issue_marked' | 'success_marked' | 'session_start' | 'session_stop' | 'tap' | 'swipe' | 'double_tap' | 'navigate'
   screenHash: string
   screenName?: string
   duration?: number // Time spent on previous screen (ms)
@@ -116,11 +116,12 @@ export class AdHocMonitor {
       description: 'Ad-hoc session started'
     })
 
-    // Start lightweight monitoring (every 2 seconds)
-    this.startMonitoring()
-
-    // Start touch event monitoring
-    await this.startTouchMonitoring(deviceId)
+    // Start lightweight monitoring (every 2 seconds) — Android only
+    const isBrowser = deviceId.startsWith('browser_')
+    if (!isBrowser) {
+      this.startMonitoring()
+      await this.startTouchMonitoring(deviceId)
+    }
 
     console.log(`[AdHocMonitor] Session started: ${sessionId}`)
     return this.currentSession
@@ -178,8 +179,10 @@ export class AdHocMonitor {
       throw new Error('No active session')
     }
 
-    const screenshot = await this.adbManager.captureScreenshot(this.currentSession.deviceId)
-    const screenHash = this.hashImage(screenshot)
+    const isBrowser = this.currentSession.deviceId.startsWith('browser_')
+    const screenshotBuf = isBrowser ? undefined : await this.adbManager.captureScreenshot(this.currentSession.deviceId)
+    const screenshot = screenshotBuf ? `data:image/png;base64,${screenshotBuf.toString('base64')}` : undefined
+    const screenHash = screenshot ? this.hashImage(screenshot) : `manual_${Date.now()}`
 
     const event: AdHocEvent = {
       id: `event_${Date.now()}`,
@@ -187,7 +190,7 @@ export class AdHocMonitor {
       type: 'manual_capture',
       screenHash,
       screenshot,
-      description: description || 'Manual screenshot capture'
+      description: description || 'Manual capture'
     }
 
     this.addEvent(event)
@@ -205,8 +208,10 @@ export class AdHocMonitor {
       throw new Error('No active session')
     }
 
-    const screenshot = await this.adbManager.captureScreenshot(this.currentSession.deviceId)
-    const screenHash = this.hashImage(screenshot)
+    const isBrowser = this.currentSession.deviceId.startsWith('browser_')
+    const screenshotBuf = isBrowser ? undefined : await this.adbManager.captureScreenshot(this.currentSession.deviceId)
+    const screenshot = screenshotBuf ? `data:image/png;base64,${screenshotBuf.toString('base64')}` : undefined
+    const screenHash = screenshot ? this.hashImage(screenshot) : `issue_${Date.now()}`
 
     const event: AdHocEvent = {
       id: `event_${Date.now()}`,
@@ -234,8 +239,10 @@ export class AdHocMonitor {
       throw new Error('No active session')
     }
 
-    const screenshot = await this.adbManager.captureScreenshot(this.currentSession.deviceId)
-    const screenHash = this.hashImage(screenshot)
+    const isBrowser = this.currentSession.deviceId.startsWith('browser_')
+    const screenshotBuf = isBrowser ? undefined : await this.adbManager.captureScreenshot(this.currentSession.deviceId)
+    const screenshot = screenshotBuf ? `data:image/png;base64,${screenshotBuf.toString('base64')}` : undefined
+    const screenHash = screenshot ? this.hashImage(screenshot) : `success_${Date.now()}`
 
     const event: AdHocEvent = {
       id: `event_${Date.now()}`,
@@ -511,8 +518,8 @@ export class AdHocMonitor {
       return
     }
 
-    const screenshot = await this.adbManager.captureScreenshot(this.currentSession.deviceId)
-    const screenHash = this.hashImage(screenshot)
+    const screenshotBuf = await this.adbManager.captureScreenshot(this.currentSession.deviceId)
+    const screenHash = this.hashImage(screenshotBuf.toString('base64'))
 
     // First screenshot
     if (!this.lastScreenHash) {
@@ -550,9 +557,9 @@ export class AdHocMonitor {
   }
 
   /**
-   * Add event to current session
+   * Add event to current session (public for external callers e.g. web renderer)
    */
-  private addEvent(event: AdHocEvent): void {
+  addEvent(event: AdHocEvent): void {
     if (!this.currentSession) {
       return
     }

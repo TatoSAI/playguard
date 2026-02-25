@@ -242,6 +242,7 @@ declare global {
         markIssue: (description: string, severity?: 'low' | 'medium' | 'high') => Promise<{ success: boolean; event?: any; error?: string }>
         markSuccess: (description: string) => Promise<{ success: boolean; event?: any; error?: string }>
         generateInsights: () => Promise<{ success: boolean; insights?: any[]; error?: string }>
+        addEvent: (eventData: any) => Promise<{ success: boolean; error?: string }>
         loadSessions: () => Promise<{ success: boolean; sessions?: any[]; error?: string }>
         deleteSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>
       }

@@ -282,6 +282,8 @@ const api = {
       ipcRenderer.invoke('adhoc:markSuccess', description),
     generateInsights: () =>
       ipcRenderer.invoke('adhoc:generateInsights'),
+    addEvent: (eventData: any) =>
+      ipcRenderer.invoke('adhoc:addEvent', eventData),
     loadSessions: () =>
       ipcRenderer.invoke('adhoc:loadSessions'),
     deleteSession: (sessionId: string) =>

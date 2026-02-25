@@ -2513,6 +2513,21 @@ function setupIPCHandlers(): void {
     }
   })
 
+  ipcMain.handle('adhoc:addEvent', async (_event, eventData: any) => {
+    try {
+      if (!adHocMonitor) throw new Error('Ad-Hoc monitor not initialized')
+      adHocMonitor.addEvent({
+        id: `event_${Date.now()}`,
+        timestamp: Date.now(),
+        screenHash: eventData.screenHash || `web_${Date.now()}`,
+        ...eventData
+      })
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
   ipcMain.handle('adhoc:loadSessions', async () => {
     try {
       if (!adHocMonitor) {
