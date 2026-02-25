@@ -37,6 +37,7 @@ interface RecordedAction {
   elementPath?: string
   elementName?: string
   elementType?: string
+  gameState?: Record<string, string | null>
   screenshot?: string // Base64 screenshot
 }
 
@@ -199,6 +200,7 @@ export default function TestRecorder(): JSX.Element {
             elementPath: action.elementPath,
             elementName: action.elementName,
             elementType: action.elementType,
+            gameState: action.gameState,
             screenshot: action.screenshot // Include screenshot from backend
           }
         })
@@ -1203,6 +1205,20 @@ export default function TestRecorder(): JSX.Element {
                     </pre>
                   </div>
                 )}
+
+                {selectedAction.gameState && Object.keys(selectedAction.gameState).length > 0 && (
+                  <div className="p-3 rounded-lg bg-muted/50">
+                    <p className="text-xs font-medium text-muted-foreground mb-2">Game State at Capture</p>
+                    <div className="space-y-1">
+                      {Object.entries(selectedAction.gameState).map(([key, value]) => (
+                        <div key={key} className="flex items-center justify-between text-xs">
+                          <span className="font-mono text-muted-foreground">{key}</span>
+                          <span className="font-mono text-foreground ml-2 max-w-[150px] truncate">{value ?? 'null'}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1276,6 +1292,11 @@ function ActionItem({ action, index, onRemove, onView }: ActionItemProps): JSX.E
             {action.elementPath && (
               <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-500/10 text-green-500 border border-green-500/20">
                 SDK
+              </span>
+            )}
+            {action.gameState && Object.keys(action.gameState).length > 0 && (
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                {Object.keys(action.gameState).length} props
               </span>
             )}
           </div>

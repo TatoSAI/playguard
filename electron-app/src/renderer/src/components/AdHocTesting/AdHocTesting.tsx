@@ -13,6 +13,11 @@ interface AdHocEvent {
   screenshot?: string
   description?: string
   metadata?: Record<string, any>
+  // SDK enrichment
+  elementName?: string
+  elementPath?: string
+  elementType?: string
+  gameState?: Record<string, string | null>
   // Touch event data
   x?: number
   y?: number
@@ -873,6 +878,11 @@ function EventItem({ event, index }: EventItemProps): JSX.Element {
                 SUCCESS
               </span>
             )}
+            {event.elementName && (
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-500/10 text-green-500 border border-green-500/20">
+                SDK
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
             <Clock className="w-3 h-3" />
@@ -890,9 +900,48 @@ function EventItem({ event, index }: EventItemProps): JSX.Element {
         </div>
       </div>
 
-      {isExpanded && event.metadata && (
-        <div className="mt-3 pt-3 border-t border-border text-xs font-mono text-muted-foreground">
-          <pre className="overflow-x-auto">{JSON.stringify(event.metadata, null, 2)}</pre>
+      {isExpanded && (
+        <div className="mt-3 pt-3 border-t border-border space-y-3">
+          {/* SDK Element */}
+          {(event.elementName || event.elementPath) && (
+            <div>
+              <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">Element</p>
+              <div className="flex items-center gap-2">
+                {event.elementType && (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                    {event.elementType}
+                  </span>
+                )}
+                <span className="text-xs font-mono text-foreground">{event.elementName || event.elementPath}</span>
+              </div>
+              {event.elementPath && event.elementName && (
+                <p className="text-[10px] font-mono text-muted-foreground mt-0.5 truncate">{event.elementPath}</p>
+              )}
+            </div>
+          )}
+
+          {/* Game State */}
+          {event.gameState && Object.keys(event.gameState).length > 0 && (
+            <div>
+              <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">Game State</p>
+              <div className="space-y-0.5">
+                {Object.entries(event.gameState).map(([key, value]) => (
+                  <div key={key} className="flex items-center justify-between text-xs">
+                    <span className="font-mono text-muted-foreground">{key}</span>
+                    <span className="font-mono text-foreground ml-2 max-w-[140px] truncate">{value ?? 'null'}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Raw metadata */}
+          {event.metadata && (
+            <div>
+              <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">Metadata</p>
+              <pre className="text-xs font-mono text-muted-foreground overflow-x-auto">{JSON.stringify(event.metadata, null, 2)}</pre>
+            </div>
+          )}
         </div>
       )}
     </div>

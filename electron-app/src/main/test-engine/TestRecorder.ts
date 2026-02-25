@@ -2,6 +2,7 @@ import { EventEmitter } from 'events'
 import { ADBManager } from '../adb/ADBManager'
 import { UnityBridge, UIElement } from '../unity/UnityBridge'
 import { HTML5Bridge } from '../html5/HTML5Bridge'
+import { captureGameState } from '../utils/SdkEnrichment'
 import { TouchEventMonitor } from './TouchEventMonitor'
 import { BrowserSessionManager } from '../services/BrowserSessionManager'
 import { BrowserDeviceManager } from '../services/BrowserDeviceManager'
@@ -17,6 +18,8 @@ export interface RecordedAction {
   elementPath?: string
   elementName?: string
   elementType?: string
+  // Game state snapshot at moment of capture (when SDK is connected)
+  gameState?: Record<string, string | null>
 }
 
 export interface RecordingSession {
@@ -319,6 +322,21 @@ export class TestRecorder extends EventEmitter {
       }
     }
 
+    // Capture game state snapshot (all registered custom properties)
+    let gameState: Record<string, string | null> | undefined
+    if (this.currentSession.sdkConnected) {
+      try {
+        const bridge = this.unityBridge.isSDKConnected()
+          ? this.unityBridge
+          : this.html5Bridge.isSDKConnected() ? this.html5Bridge : null
+        if (bridge) {
+          gameState = await captureGameState(bridge)
+        }
+      } catch (error) {
+        console.warn('[TestRecorder] Failed to capture game state:', error)
+      }
+    }
+
     const isBrowserDevice = this.currentSession.deviceId.startsWith('browser_')
 
     // Execute the action on the device (unless already executed or it's a browser device)
@@ -455,7 +473,8 @@ export class TestRecorder extends EventEmitter {
         type,
         timestamp: Date.now(),
         data,
-        ...elementData
+        ...elementData,
+        gameState
       }
       this.addAction(action)
       return
@@ -485,7 +504,8 @@ export class TestRecorder extends EventEmitter {
       timestamp: Date.now(),
       data,
       screenshot,
-      ...elementData
+      ...elementData,
+      gameState
     })
   }
 
@@ -635,6 +655,13 @@ export class TestRecorder extends EventEmitter {
   private isInteractableType(type: string): boolean {
     const interactableTypes = ['Button', 'Toggle', 'Slider', 'Dropdown', 'InputField']
     return interactableTypes.includes(type)
+  }
+
+  /**
+   * Expose UnityBridge for sharing with AdHocMonitor (avoids creating a second instance)
+   */
+  getUnityBridge(): UnityBridge {
+    return this.unityBridge
   }
 
   /**

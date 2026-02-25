@@ -195,9 +195,6 @@ app.whenReady().then(async () => {
   adbManager = new ADBManager()
   await adbManager.initialize()
 
-  // Initialize Ad-Hoc Monitor (requires ADB)
-  adHocMonitor = new AdHocMonitor(adbManager)
-
   // Initialize Device Setup Manager (requires ADB)
   deviceSetupManager = new DeviceSetupManager(adbManager)
 
@@ -248,9 +245,15 @@ app.whenReady().then(async () => {
   html5Bridge = new HTML5Bridge(adbManager)
   html5Bridge.startServer()
 
+  // Ad-Hoc Monitor — instantiated here (after html5Bridge) so we can inject the bridge
+  adHocMonitor = new AdHocMonitor(adbManager, undefined, html5Bridge)
+
   // Test engine
   testRunner = new TestRunner(adbManager, prerequisiteVerifier, testCaseManager, dependencyValidator, undefined, html5Bridge, browserSessionManager)
   testRecorder = new TestRecorder(adbManager, html5Bridge, browserSessionManager, browserDeviceManager)
+
+  // Share UnityBridge from TestRecorder with AdHocMonitor (avoids a second instance)
+  adHocMonitor.setUnityBridge(testRecorder.getUnityBridge())
 
   // RUN.studio sync API
   syncAPIServer = new SyncAPIServer(testCaseManager, suiteManager)
@@ -2516,11 +2519,26 @@ function setupIPCHandlers(): void {
   ipcMain.handle('adhoc:addEvent', async (_event, eventData: any) => {
     try {
       if (!adHocMonitor) throw new Error('Ad-Hoc monitor not initialized')
+
+      // SDK enrichment for tap events originating from the web renderer
+      let enrichment: Record<string, any> = {}
+      if (
+        (eventData.type === 'tap' || eventData.type === 'double_tap') &&
+        typeof eventData.x === 'number' &&
+        typeof eventData.y === 'number'
+      ) {
+        enrichment = await adHocMonitor.enrichTap(eventData.x, eventData.y)
+        if (enrichment.elementName) {
+          enrichment.description = `Tap on "${enrichment.elementName}" (${enrichment.elementType}) at (${Math.round(eventData.x)}, ${Math.round(eventData.y)})`
+        }
+      }
+
       adHocMonitor.addEvent({
         id: `event_${Date.now()}`,
         timestamp: Date.now(),
         screenHash: eventData.screenHash || `web_${Date.now()}`,
-        ...eventData
+        ...eventData,
+        ...enrichment
       })
       return { success: true }
     } catch (error) {

@@ -9,6 +9,7 @@ import { app } from 'electron'
 import * as crypto from 'crypto'
 import { ADBManager } from '../adb/ADBManager'
 import { TouchEventMonitor } from '../test-engine/TouchEventMonitor'
+import { ISdkBridge, UIElement, findElementAtPosition, captureGameState } from '../utils/SdkEnrichment'
 
 export interface AdHocEvent {
   id: string
@@ -20,6 +21,11 @@ export interface AdHocEvent {
   screenshot?: string // Only for manual captures, issues, or successes
   description?: string // For issues/successes
   metadata?: Record<string, any>
+  // SDK enrichment (when SDK is connected)
+  elementName?: string
+  elementPath?: string
+  elementType?: string
+  gameState?: Record<string, string | null>
   // Touch event data
   x?: number
   y?: number
@@ -68,9 +74,45 @@ export class AdHocMonitor {
   private dataDir: string | null = null
   private adbManager: ADBManager
   private touchMonitor: TouchEventMonitor | null = null
+  private unityBridge: ISdkBridge | null = null
+  private html5Bridge: ISdkBridge | null = null
+  private elementsCache: UIElement[] = []
 
-  constructor(adbManager: ADBManager) {
+  constructor(adbManager: ADBManager, unityBridge?: ISdkBridge, html5Bridge?: ISdkBridge) {
     this.adbManager = adbManager
+    this.unityBridge = unityBridge ?? null
+    this.html5Bridge = html5Bridge ?? null
+  }
+
+  /** Inject UnityBridge after construction (shared instance from TestRecorder) */
+  setUnityBridge(bridge: ISdkBridge): void {
+    this.unityBridge = bridge
+  }
+
+  /** Returns the first connected SDK bridge, or null if neither is connected */
+  private getActiveBridge(): ISdkBridge | null {
+    if (this.unityBridge?.isSDKConnected()) return this.unityBridge
+    if (this.html5Bridge?.isSDKConnected()) return this.html5Bridge
+    return null
+  }
+
+  /** Identify element + snapshot game state for a tap at (x, y). Never throws. */
+  async enrichTap(x: number, y: number): Promise<Partial<AdHocEvent>> {
+    const bridge = this.getActiveBridge()
+    if (!bridge) return {}
+    try {
+      const element = findElementAtPosition(this.elementsCache, x, y)
+      const gameState = await captureGameState(bridge)
+      const enrichment: Partial<AdHocEvent> = { gameState }
+      if (element) {
+        enrichment.elementName = element.name
+        enrichment.elementPath = element.path
+        enrichment.elementType = element.type
+      }
+      return enrichment
+    } catch {
+      return {}
+    }
   }
 
   /**
@@ -123,6 +165,17 @@ export class AdHocMonitor {
       await this.startTouchMonitoring(deviceId)
     }
 
+    // Pre-fetch UI element cache if SDK is connected
+    const bridge = this.getActiveBridge()
+    if (bridge) {
+      try {
+        this.elementsCache = await bridge.getUIElements()
+        console.log(`[AdHocMonitor] Cached ${this.elementsCache.length} SDK UI elements`)
+      } catch {
+        this.elementsCache = []
+      }
+    }
+
     console.log(`[AdHocMonitor] Session started: ${sessionId}`)
     return this.currentSession
   }
@@ -159,6 +212,7 @@ export class AdHocMonitor {
     this.lastScreenHash = null
     this.lastScreenTime = null
     this.currentScreenHash = null
+    this.elementsCache = []
 
     console.log(`[AdHocMonitor] Session stopped: ${session.id}`)
     return session
@@ -428,7 +482,7 @@ export class AdHocMonitor {
       console.log('[AdHocMonitor] TouchEventMonitor created successfully')
 
       // Listen for detected gestures
-      this.touchMonitor.on('gesture', (gesture: any) => {
+      this.touchMonitor.on('gesture', async (gesture: any) => {
         console.log(`[AdHocMonitor] Gesture detected: ${gesture.type}`, gesture)
         if (!this.currentSession) return
 
@@ -436,24 +490,34 @@ export class AdHocMonitor {
         const now = Date.now()
 
         if (gesture.type === 'tap') {
+          const enrichment = await this.enrichTap(gesture.x, gesture.y)
+          const desc = enrichment.elementName
+            ? `Tap on "${enrichment.elementName}" (${enrichment.elementType}) at (${Math.round(gesture.x)}, ${Math.round(gesture.y)})`
+            : `Tap at (${Math.round(gesture.x)}, ${Math.round(gesture.y)})`
           event = {
             id: `event_${now}`,
             timestamp: now,
             type: 'tap',
             screenHash: this.currentScreenHash || '',
-            description: `Tap at (${Math.round(gesture.x)}, ${Math.round(gesture.y)})`,
+            description: desc,
             x: gesture.x,
-            y: gesture.y
+            y: gesture.y,
+            ...enrichment
           }
         } else if (gesture.type === 'double-tap') {
+          const enrichment = await this.enrichTap(gesture.x, gesture.y)
+          const desc = enrichment.elementName
+            ? `Double tap on "${enrichment.elementName}" at (${Math.round(gesture.x)}, ${Math.round(gesture.y)})`
+            : `Double tap at (${Math.round(gesture.x)}, ${Math.round(gesture.y)})`
           event = {
             id: `event_${now}`,
             timestamp: now,
             type: 'double_tap',
             screenHash: this.currentScreenHash || '',
-            description: `Double tap at (${Math.round(gesture.x)}, ${Math.round(gesture.y)})`,
+            description: desc,
             x: gesture.x,
-            y: gesture.y
+            y: gesture.y,
+            ...enrichment
           }
         } else if (gesture.type === 'swipe') {
           const direction = this.getSwipeDirection(gesture.x1, gesture.y1, gesture.x2, gesture.y2)
